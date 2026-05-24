@@ -1,0 +1,124 @@
+# hermes.toml — Hermes Agent configuration
+#
+# This file is the durable, git-tracked configuration for the agent's runtime
+# behavior. It is symlinked into ~/.hermes/hermes.toml by the bootstrap script
+# on container start, so a fresh Railway deploy reconstructs the full config
+# from the codebase.
+#
+# Secrets (API keys, tokens) are NOT stored here — they come from Railway
+# environment variables and are read at runtime.
+
+[provider]
+# Primary provider. Nous Portal is first-class for Hermes; swap to openrouter,
+# openai, or any OpenAI-compatible endpoint by changing `name` and `base_url`.
+name = "nous"
+base_url = "https://inference-api.nousresearch.com/v1"
+# API key is read from $NOUS_API_KEY (set in Railway env).
+api_key_env = "NOUS_API_KEY"
+
+[model]
+# Default model for the main agent loop. For a strict-CoALA coding/DevOps
+# agent, prefer a model with strong tool-calling, long context, and good
+# instruction following.
+default = "hermes-4-405b"
+# Subagent default — used when the main agent delegates. A smaller, faster
+# model is usually fine here.
+subagent = "hermes-4-70b"
+# Reasoning model — invoked for explicit reasoning actions (CoALA §4.4)
+# when the agent self-selects extended thinking.
+reasoning = "hermes-4-405b"
+
+[memory]
+# Episodic + semantic substrate. SQLite + FTS5 by default; lives on the
+# persistent volume so it survives redeploys.
+enabled = true
+db_path = "/data/hermes/memory.db"
+# Auto-summarize sessions older than this into semantic claims via the
+# `coala-reflection` skill.
+auto_reflect_after_turns = 50
+
+[memory.honcho]
+# Dialectic user modeling — Honcho stores the agent's evolving model of the
+# user. Optional; disable if not running Honcho.
+enabled = false
+base_url = ""
+
+[skills]
+# Skill discovery roots. The bootstrap script seeds the git-tracked skills
+# into ~/.hermes/skills/ on first run; the agent may author additional
+# skills there at runtime (procedural learning, CoALA §4.5).
+directories = [
+  "/data/hermes/skills",
+  "/app/hermes-config/skills",
+]
+# Progressive disclosure: level-0 index always in context, level-1+ loaded
+# on demand by description match.
+progressive_disclosure = true
+
+[context]
+# Files always loaded into working memory at session start.
+agents_md = "/app/hermes-config/AGENTS.md"
+soul_md = "/app/hermes-config/SOUL.md"
+# MEMORY.md and USER.md live on the volume — they accumulate.
+memory_md = "/data/hermes/MEMORY.md"
+user_md = "/data/hermes/USER.md"
+
+[tools]
+# 70+ built-in tools — toolsets enabled for this agent's domain.
+enabled_toolsets = [
+  "filesystem",
+  "shell",
+  "git",
+  "code-execution",
+  "web-search",
+  "web-fetch",
+  "memory",
+  "skill-manage",
+  "subagent",
+]
+
+[tools.shell]
+# Shell tool isolation. On Railway we run inside a container already, so a
+# secondary sandbox is usually unnecessary, but command approval stays on
+# for destructive ops.
+require_approval_for = [
+  "rm -rf",
+  "git push --force",
+  "git reset --hard",
+  "DROP TABLE",
+  "DROP DATABASE",
+  "kubectl delete",
+  "railway down",
+]
+
+[mcp]
+# MCP server configuration is in mcp.json (loaded separately, hot-reloadable).
+config_path = "/app/hermes-config/mcp.json"
+
+[messaging]
+# Messaging gateways — set the ones you actually use. Tokens come from
+# Railway env vars.
+[messaging.telegram]
+enabled = false
+token_env = "TELEGRAM_BOT_TOKEN"
+
+[messaging.discord]
+enabled = false
+token_env = "DISCORD_BOT_TOKEN"
+
+[messaging.slack]
+enabled = false
+bot_token_env = "SLACK_BOT_TOKEN"
+app_token_env = "SLACK_APP_TOKEN"
+
+[logging]
+level = "info"
+# Trajectory export — useful for later RL or eval work.
+export_trajectories = true
+trajectory_dir = "/data/hermes/trajectories"
+
+[safety]
+# Decision-cycle guardrails enforced by the runtime (not just the prompt).
+max_reasoning_chain_without_grounding = 3   # CoALA §5.4 loop-back trigger
+require_rollback_plan_for_destructive = true
+production_writes_require_confirmation = true

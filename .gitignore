@@ -1,0 +1,31 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Runtime state (lives on Railway volume, never in git)
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo

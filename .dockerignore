@@ -1,0 +1,13 @@
+.git
+.github
+.gitignore
+.env
+.env.*
+*.md.bak
+__pycache__
+*.pyc
+.pytest_cache
+.venv
+node_modules
+data/
+.DS_Store

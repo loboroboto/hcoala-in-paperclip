@@ -1,0 +1,50 @@
+# railway.toml — Railway service configuration for the Hermes Agent.
+#
+# This file lives at the repo root and tells Railway how to build and run.
+# Volume configuration is done in the Railway dashboard (the volume mount
+# path must match /data — see hermes-config/hermes.toml).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "docker/Dockerfile"
+
+[deploy]
+# Healthcheck — Hermes exposes /healthz when run with the serve subcommand.
+# Adjust if you're running gateway-only or TUI mode.
+healthcheckPath = "/healthz"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# Start command — overridden here if you want non-default (e.g. a specific
+# messaging gateway). Leave blank to use the Dockerfile CMD.
+# startCommand = "hermes serve --gateway telegram"
+
+# -----------------------------------------------------------------------------
+# Volume note:
+#
+# Configure the volume in the Railway dashboard:
+#   Mount path: /data
+#   Size: at least 1GB (memory.db + skills + trajectories grow over time)
+#
+# The volume is what makes the agent durable across redeploys. Without it,
+# every redeploy wipes episodic memory and learned skills.
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Required environment variables (set in Railway dashboard):
+#
+#   NOUS_API_KEY              — primary LLM provider (or OPENROUTER_API_KEY /
+#                               OPENAI_API_KEY depending on hermes.toml)
+#
+# Optional:
+#   GITHUB_TOKEN              — for GitHub MCP
+#   RAILWAY_TOKEN             — for Railway MCP / CLI grounding
+#   TELEGRAM_BOT_TOKEN        — Telegram gateway
+#   DISCORD_BOT_TOKEN         — Discord gateway
+#   SLACK_BOT_TOKEN           — Slack gateway
+#   SENTRY_AUTH_TOKEN         — Sentry MCP for incident debugging
+#   HERMES_FORCE_RESEED       — set to 1 to re-seed bundled skills from /app
+#                               on next boot (overwriting agent-authored
+#                               patches to seed skills)
+# -----------------------------------------------------------------------------

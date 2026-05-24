@@ -1,0 +1,83 @@
+{
+  "_comment": [
+    "MCP server configuration.",
+    "",
+    "Under CoALA, each MCP server is an additional GROUNDING action surface",
+    "(§4.2). Adding a server extends the external action space; removing one",
+    "shrinks it. Treat additions as architectural changes, not config tweaks.",
+    "",
+    "Secrets come from Railway environment variables — never hard-code tokens",
+    "here. The ${VAR} syntax is expanded at load time.",
+    "",
+    "Servers below are commented out by default; uncomment and configure the",
+    "ones you actually need. Each comes with a note on which CoALA grounding",
+    "category it lives in."
+  ],
+
+  "mcpServers": {
+
+    "_github_example": {
+      "_note": "GROUNDING — digital. Repo browsing, issue/PR ops, code search.",
+      "_disabled": true,
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      }
+    },
+
+    "_filesystem_example": {
+      "_note": "GROUNDING — digital. Scoped filesystem access. Built-in tools already cover most of this; enable only if you need explicit MCP-level scoping for subagents.",
+      "_disabled": true,
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/data/workspace"
+      ]
+    },
+
+    "_postgres_example": {
+      "_note": "GROUNDING — digital. Read-only DB introspection. Mark production DBs as read-only in URL; writes require explicit promotion.",
+      "_disabled": true,
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": {
+        "POSTGRES_URL": "${DATABASE_URL_READONLY}"
+      }
+    },
+
+    "_railway_example": {
+      "_note": "GROUNDING — digital. If a community Railway MCP is available, mount it here. Otherwise the agent uses the railway CLI via the shell tool.",
+      "_disabled": true,
+      "command": "npx",
+      "args": ["-y", "@railway/mcp-server"],
+      "env": {
+        "RAILWAY_TOKEN": "${RAILWAY_TOKEN}"
+      }
+    },
+
+    "_brave_search_example": {
+      "_note": "GROUNDING — digital. External web search beyond the built-in web tools.",
+      "_disabled": true,
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+      }
+    },
+
+    "_sentry_example": {
+      "_note": "GROUNDING — digital. Error/incident telemetry. Essential for the debug-incident skill if you use Sentry.",
+      "_disabled": true,
+      "command": "npx",
+      "args": ["-y", "@sentry/mcp-server"],
+      "env": {
+        "SENTRY_AUTH_TOKEN": "${SENTRY_AUTH_TOKEN}",
+        "SENTRY_ORG": "${SENTRY_ORG}"
+      }
+    }
+  },
+
+  "_disabled_servers_are_ignored": "Hermes ignores entries whose key starts with underscore. Rename _github_example → github (and drop _disabled / _note) to activate."
+}
