@@ -19,8 +19,12 @@
 #       MEMORY.md              ← curated semantic facts
 #       USER.md                ← Honcho-style user model
 #       PEERS.md               ← peer-agent semantic model (AGENTS.md §6)
+#       auth.json              ← OAuth tokens (refreshed in place)
 #       skills/                ← agent-authored skills land here
 #       trajectories/          ← exported decision-cycle traces
+#       sessions/, logs/, pairing/, cron/, hooks/, plans/,
+#       image_cache/, audio_cache/, workspace/, home/
+#                              ← hermes-native subdirs (created if missing)
 #
 #   ~/.hermes/                 ← Hermes runtime expects this; we SYMLINK
 #       AGENTS.md   → /app/hermes-config/AGENTS.md
@@ -62,10 +66,46 @@ log "config dir OK: $CONFIG_DIR"
 # ----------------------------------------------------------------------------
 # 2. Ensure volume dirs exist (Railway provides the mount; we create children)
 # ----------------------------------------------------------------------------
+# The full set hermes expects to find under HERMES_HOME. Missing dirs can
+# cause opaque "no such file" errors deep in cron / session / log code paths
+# even though the user-facing feature isn't being exercised directly.
 mkdir -p "$VOLUME_DIR" \
          "$VOLUME_DIR/skills" \
          "$VOLUME_DIR/trajectories" \
-         "$VOLUME_DIR/memory"
+         "$VOLUME_DIR/memory" \
+         "$VOLUME_DIR/cron" \
+         "$VOLUME_DIR/sessions" \
+         "$VOLUME_DIR/logs" \
+         "$VOLUME_DIR/pairing" \
+         "$VOLUME_DIR/hooks" \
+         "$VOLUME_DIR/image_cache" \
+         "$VOLUME_DIR/audio_cache" \
+         "$VOLUME_DIR/workspace" \
+         "$VOLUME_DIR/plans" \
+         "$VOLUME_DIR/home"
+
+# Clear any stale gateway PID file left over from a previous container.
+# `hermes gateway` writes a pid file on start but does not always remove
+# it on SIGTERM. Since /data is a persistent volume, the file survives
+# container restarts and causes every subsequent boot to exit with
+# "PID file race lost". No hermes process can be running this early
+# (we're pre-exec in a fresh container), so removing unconditionally is
+# safe. Defensive even though our default CMD is `hermes serve`, not
+# `hermes gateway` — costs nothing, prevents a foot-gun if anyone
+# switches modes.
+rm -f "$VOLUME_DIR/gateway.pid"
+
+# Bootstrap OAuth tokens from env var. Needed for providers that auth
+# via OAuth device flow rather than a static API key (xAI Grok SuperGrok,
+# Gemini CLI, Qwen OAuth, Claude Code). Set HERMES_AUTH_JSON_BOOTSTRAP to
+# the contents of a locally-generated ~/.hermes/auth.json. Written only
+# once — subsequent token refreshes update the file in place on the
+# persistent volume.
+if [[ ! -f "$VOLUME_DIR/auth.json" ]] && [[ -n "${HERMES_AUTH_JSON_BOOTSTRAP:-}" ]]; then
+  printf '%s' "$HERMES_AUTH_JSON_BOOTSTRAP" > "$VOLUME_DIR/auth.json"
+  chmod 600 "$VOLUME_DIR/auth.json"
+  log "bootstrapped $VOLUME_DIR/auth.json from HERMES_AUTH_JSON_BOOTSTRAP"
+fi
 
 # Seed MEMORY.md and USER.md if absent (agent will append to them over time).
 if [[ ! -f "$VOLUME_DIR/MEMORY.md" ]]; then
@@ -190,6 +230,16 @@ ln -sfn "$VOLUME_DIR/PEERS.md"      "$HERMES_DIR/PEERS.md"
 ln -sfn "$VOLUME_DIR/skills"        "$HERMES_DIR/skills"
 ln -sfn "$VOLUME_DIR/memory.db"     "$HERMES_DIR/memory.db" 2>/dev/null || true
 ln -sfn "$VOLUME_DIR/trajectories"  "$HERMES_DIR/trajectories"
+ln -sfn "$VOLUME_DIR/sessions"      "$HERMES_DIR/sessions"
+ln -sfn "$VOLUME_DIR/logs"          "$HERMES_DIR/logs"
+ln -sfn "$VOLUME_DIR/pairing"       "$HERMES_DIR/pairing"
+ln -sfn "$VOLUME_DIR/cron"          "$HERMES_DIR/cron"
+ln -sfn "$VOLUME_DIR/hooks"         "$HERMES_DIR/hooks"
+ln -sfn "$VOLUME_DIR/plans"         "$HERMES_DIR/plans"
+ln -sfn "$VOLUME_DIR/image_cache"   "$HERMES_DIR/image_cache"
+ln -sfn "$VOLUME_DIR/audio_cache"   "$HERMES_DIR/audio_cache"
+ln -sfn "$VOLUME_DIR/workspace"     "$HERMES_DIR/workspace"
+ln -sfn "$VOLUME_DIR/auth.json"     "$HERMES_DIR/auth.json" 2>/dev/null || true
 
 log "~/.hermes/ wired:"
 ls -la "$HERMES_DIR" | sed 's/^/[bootstrap]   /' >&2

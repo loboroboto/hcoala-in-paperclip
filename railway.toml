@@ -11,10 +11,12 @@ dockerfilePath = "docker/Dockerfile"
 [deploy]
 # Healthcheck — Hermes exposes /healthz when run with the serve subcommand.
 # Adjust if you're running gateway-only or TUI mode.
+# Timeout is generous because the cold-start image pulls hermes + extras
+# + ui-tui bundle; first boot can take a couple of minutes.
 healthcheckPath = "/healthz"
-healthcheckTimeout = 60
+healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 5
+restartPolicyMaxRetries = 10
 
 # Start command — overridden here if you want non-default (e.g. a specific
 # messaging gateway). Leave blank to use the Dockerfile CMD.
@@ -44,6 +46,14 @@ restartPolicyMaxRetries = 5
 #   DISCORD_BOT_TOKEN         — Discord gateway
 #   SLACK_BOT_TOKEN           — Slack gateway
 #   SENTRY_AUTH_TOKEN         — Sentry MCP for incident debugging
+#   PAPERCLIP_AI_TOKEN        — paperclip_ai peer-agent platform (stub)
+#   MULTICA_TOKEN             — multica peer-agent swarm (stub)
+#   HERMES_AUTH_JSON_BOOTSTRAP — JSON contents of a locally-generated
+#                               ~/.hermes/auth.json, written to the volume
+#                               on first boot. Use for OAuth-based providers
+#                               (xAI Grok SuperGrok, Gemini CLI, Qwen OAuth,
+#                               Claude Code) instead of an interactive
+#                               device flow.
 #   HERMES_FORCE_RESEED       — set to 1 to re-seed bundled skills from /app
 #                               on next boot (overwriting agent-authored
 #                               patches to seed skills)

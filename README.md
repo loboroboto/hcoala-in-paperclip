@@ -18,11 +18,12 @@ same architecture on every boot.
 .
 ├── README.md                       ← you are here
 ├── railway.toml                    ← Railway build/deploy config
+├── .env.example                    ← committed template; copy to .env for local dev
 ├── .dockerignore
 ├── .gitignore
 │
 ├── docker/
-│   └── Dockerfile                  ← Python 3.12 + Hermes + Railway CLI
+│   └── Dockerfile                  ← uv + tini + pinned Hermes + pre-built ui-tui + Railway CLI
 │
 ├── scripts/
 │   └── bootstrap.sh                ← idempotent setup on every container boot
@@ -78,9 +79,16 @@ The foundation is **declarative and re-applyable**. A fresh Railway deploy:
 1. Builds the image from `docker/Dockerfile` — installs Hermes, Railway CLI,
    and copies `hermes-config/` into `/app/`.
 2. Mounts the persistent volume at `/data`.
-3. Runs `scripts/bootstrap.sh` (the ENTRYPOINT), which:
+3. Runs `scripts/bootstrap.sh` (the ENTRYPOINT, wrapped in `tini` as PID 1
+   so MCP stdio servers and other subprocess fanout get reaped cleanly and
+   `SIGTERM` propagates through the whole process group), which:
    - Verifies `/app/hermes-config/` is complete.
-   - Creates `/data/hermes/` subdirectories if missing.
+   - Creates the full set of `/data/hermes/` subdirectories hermes expects
+     (cron, sessions, logs, pairing, hooks, image_cache, audio_cache,
+     workspace, plans, home, plus our memory/skills/trajectories).
+   - Clears any stale `gateway.pid` lockfile from a prior container.
+   - Bootstraps OAuth tokens to `/data/hermes/auth.json` if
+     `HERMES_AUTH_JSON_BOOTSTRAP` is set and no file exists yet.
    - Seeds `MEMORY.md`, `USER.md`, and `PEERS.md` if missing (idempotent —
      won't clobber).
    - Copies seed skills into `/data/hermes/skills/` if missing (so agent
@@ -89,9 +97,14 @@ The foundation is **declarative and re-applyable**. A fresh Railway deploy:
      to the git-tracked `/app/` versions — **architecture is always fresh
      from the repo**.
    - Symlinks `~/.hermes/MEMORY.md`, `USER.md`, `PEERS.md`, `skills/`,
-     `memory.db`, `trajectories/` to the volume — **state persists across
-     deploys**.
+     `memory.db`, `trajectories/`, `auth.json`, and the hermes-native
+     subdirs to the volume — **state persists across deploys**.
 4. Execs the CMD (`hermes serve`).
+
+The image bakes a **pinned hermes-agent version** (via the `HERMES_REF`
+build arg, default `v2026.5.16`) instead of `pip install` against the
+latest, so rebuilds are reproducible. Bump it deliberately when you want
+a new upstream.
 
 **What's on the volume (mutable, persistent):**
 `memory.db`, `MEMORY.md`, `USER.md`, `PEERS.md`, agent-authored skills,
@@ -157,6 +170,14 @@ railway link <your-project-id>
 railway up
 ```
 
+For **local dev** (`docker run` against a named volume) instead of Railway:
+copy `.env.example` to `.env`, fill in real values, then:
+
+```bash
+docker build -t hermes-coala -f docker/Dockerfile .
+docker run --rm -it --env-file .env -v hermes-data:/data hermes-coala
+```
+
 ### 2. Configure the volume in the Railway dashboard
 
 - **Mount path:** `/data` (must match `hermes.toml`'s paths)
@@ -179,6 +200,7 @@ In the Railway dashboard:
 | `SENTRY_AUTH_TOKEN`       | Optional  | Sentry MCP (for `debug-incident` skill)    |
 | `PAPERCLIP_AI_TOKEN`      | Optional  | paperclip_ai peer-agent platform (stub — uncomment in `mcp.json`) |
 | `MULTICA_TOKEN`           | Optional  | multica peer-agent swarm (stub — uncomment in `mcp.json`)         |
+| `HERMES_AUTH_JSON_BOOTSTRAP` | Optional | Contents of a locally-generated `~/.hermes/auth.json`. Written to `/data/hermes/auth.json` on first boot, then refreshed in place. Use for OAuth-based providers (xAI Grok SuperGrok, Gemini CLI, Qwen OAuth, Claude Code) — avoids the interactive device-flow on first run. |
 | `HERMES_FORCE_RESEED`     | Optional  | Set to `1` to overwrite agent-patched seed skills on next boot |
 
 ¹ At least one provider key is required; pick the one matching `provider.name`
