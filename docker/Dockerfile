@@ -91,7 +91,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
 # Layer 3: Railway CLI. Used at runtime by the deploy-railway skill and
 # by the agent for Railway MCP / CLI grounding (RAILWAY_TOKEN). Tiny
 # install — its own layer purely for diagnostic clarity if it ever breaks.
-RUN curl -fsSL https://railway.app/install.sh | sh
+RUN curl -fsSL https://railway.app/install.sh | sh -s -- --yes --bin-dir /usr/local/bin
 
 # Install hermes-agent (provides the `hermes` CLI) at pinned ref. The [all]
 # extras in current hermes pull cron, cli, dev, pty, mcp, homeassistant,
