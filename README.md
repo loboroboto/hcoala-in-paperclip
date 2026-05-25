@@ -1,7 +1,7 @@
-# Hermes Agent — CoALA-Aligned Foundation
+# Hermes Agent — CoALA Oriented Foundation
 
 A Hermes Agent ([NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)) deployment whose
-foundational architecture is explicitly aligned with the **Cognitive
+foundational configuration is explicitly oriented towards the **Cognitive
 Architectures for Language Agents (CoALA)** framework — Sumers, Yao,
 Narasimhan & Griffiths, [arXiv:2309.02427v3](https://arxiv.org/html/2309.02427v3).
 
