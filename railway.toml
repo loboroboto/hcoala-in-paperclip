@@ -9,11 +9,12 @@ builder = "DOCKERFILE"
 dockerfilePath = "docker/Dockerfile"
 
 [deploy]
-# Healthcheck — Hermes exposes /healthz when run with the serve subcommand.
-# Adjust if you're running gateway-only or TUI mode.
+# Healthcheck — the admin server (server.py from the pinned template clone)
+# exposes /health as a public, unauthenticated route. The agent itself sits
+# behind cookie auth on every other route.
 # Timeout is generous because the cold-start image pulls hermes + extras
-# + ui-tui bundle; first boot can take a couple of minutes.
-healthcheckPath = "/healthz"
+# + web + ui-tui bundles; first boot can take a couple of minutes.
+healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
@@ -38,6 +39,15 @@ restartPolicyMaxRetries = 10
 #
 #   NOUS_API_KEY              — primary LLM provider (or OPENROUTER_API_KEY /
 #                               OPENAI_API_KEY depending on hermes.toml)
+#
+# Recommended (web admin login):
+#   ADMIN_USERNAME            — admin username for the dashboard. Defaults
+#                               to "admin" if unset.
+#   ADMIN_PASSWORD            — admin password. If unset, a random 16-char
+#                               token is generated on boot and printed to
+#                               deploy logs (look for "Admin credentials").
+#                               Cookie secret regenerates on every boot, so
+#                               redeploys invalidate all sessions.
 #
 # Optional:
 #   GITHUB_TOKEN              — for GitHub MCP

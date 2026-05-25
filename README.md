@@ -189,6 +189,8 @@ In the Railway dashboard:
 
 | Variable                  | Required? | Purpose                                    |
 |---------------------------|-----------|--------------------------------------------|
+| `ADMIN_USERNAME`          | Recommended | Username for the web admin login. Defaults to `admin` if unset. |
+| `ADMIN_PASSWORD`          | Recommended | Password for the web admin login. If unset, a random 16-char token is generated on boot and printed to deploy logs. Cookie secret regenerates on every boot, so redeploys invalidate sessions. |
 | `NOUS_API_KEY`            | Yes¹      | LLM provider (Nous Portal)                 |
 | `OPENROUTER_API_KEY`      | Yes¹      | Alternative provider                       |
 | `OPENAI_API_KEY`          | Yes¹      | Alternative provider                       |
@@ -221,11 +223,30 @@ peer-agent platforms, also uncomment the matching `[[peers.peer]]` and
 `[[channels.channel]]` blocks in `hermes-config/hermes.toml` — see
 [Group Operation](#group-operation). Commit, redeploy.
 
-### 5. Talk to it
+### 5. Open the web admin
 
-If you enabled a messaging gateway, message the agent there. Otherwise, the
-serve mode exposes a CLI/API endpoint per the Hermes docs. For interactive
-debugging:
+Open the Railway-assigned URL in a browser. Log in with `ADMIN_USERNAME`
+(default `admin`) and `ADMIN_PASSWORD`. If you didn't set `ADMIN_PASSWORD`,
+grep the deploy logs for `Admin credentials —` to find the auto-generated
+one.
+
+The dashboard surfaces:
+
+- **Web UI / chat** — talk to the agent directly from the browser (proxied
+  through to `hermes dashboard`).
+- **Live status** — gateway state, uptime, model in use.
+- **Streaming logs** — gateway + dashboard subprocess output.
+- **User pairing** — approve/deny/revoke channel users (Telegram, Discord, Slack).
+- **Runtime config** — set provider keys and channel tokens.
+
+The HTTP front door is a pinned clone of
+[`praveen-ks-2001/hermes-agent-template`](https://github.com/praveen-ks-2001/hermes-agent-template)
+(see `HERMES_ADMIN_REF` in `docker/Dockerfile`).
+
+### 6. Talk to it through messaging gateways
+
+If you enabled a messaging gateway (Telegram, Discord, Slack), message the
+agent there directly. For interactive terminal debugging:
 
 ```bash
 railway run -- hermes --tui
@@ -250,6 +271,15 @@ Because the architecture is git-tracked, all changes are PR-reviewable.
 
 Commit, push, redeploy. Bootstrap is idempotent — re-running it never
 destroys volume state.
+
+**Dashboard vs git-tracked architecture.** The web admin can edit *runtime
+state on the volume* — operator-set secrets in `/data/hermes/.env`,
+gateway lifecycle, pairing approvals. It does **not** edit
+`hermes-config/*`. Those files are git-tracked, symlinked from `/app`, and
+the source of truth for architecture (provider type, peer/channel
+registries, toolsets, seed skills, safety policies). Dashboard config
+changes do not round-trip into git — if you want a change to survive a
+volume wipe, make it in `hermes-config/` and redeploy.
 
 ---
 

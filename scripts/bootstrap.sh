@@ -84,15 +84,29 @@ mkdir -p "$VOLUME_DIR" \
          "$VOLUME_DIR/plans" \
          "$VOLUME_DIR/home"
 
+# Seed runtime state files the admin server (server.py) reads/writes. These
+# live on the volume so dashboard-driven edits persist across redeploys.
+# The admin server expects both to exist and barfs on missing files.
+#   .env          — operator-set secrets and runtime toggles (provider
+#                   keys, gateway tokens). hermes.toml's `*_env` indirection
+#                   means values landed here flow into the runtime without
+#                   touching git-tracked architecture.
+#   config.yaml   — hermes runtime config (mcp_servers etc., deep-merged
+#                   with user-managed sections on save). Seeded from the
+#                   bundled example if absent.
+touch "$VOLUME_DIR/.env"
+if [[ ! -f "$VOLUME_DIR/config.yaml" ]] && [[ -f /opt/hermes-agent/cli-config.yaml.example ]]; then
+  cp /opt/hermes-agent/cli-config.yaml.example "$VOLUME_DIR/config.yaml"
+  log "seeded $VOLUME_DIR/config.yaml from cli-config.yaml.example"
+fi
+
 # Clear any stale gateway PID file left over from a previous container.
-# `hermes gateway` writes a pid file on start but does not always remove
-# it on SIGTERM. Since /data is a persistent volume, the file survives
-# container restarts and causes every subsequent boot to exit with
-# "PID file race lost". No hermes process can be running this early
-# (we're pre-exec in a fresh container), so removing unconditionally is
-# safe. Defensive even though our default CMD is `hermes serve`, not
-# `hermes gateway` — costs nothing, prevents a foot-gun if anyone
-# switches modes.
+# `hermes gateway` (spawned by the admin server) writes a pid file on
+# start but does not always remove it on SIGTERM. Since /data is a
+# persistent volume, the file survives container restarts and causes
+# every subsequent boot to exit with "PID file race lost". No hermes
+# process can be running this early (we're pre-exec in a fresh container),
+# so removing unconditionally is safe.
 rm -f "$VOLUME_DIR/gateway.pid"
 
 # Bootstrap OAuth tokens from env var. Needed for providers that auth
@@ -262,4 +276,7 @@ log "bootstrap complete."
 # ----------------------------------------------------------------------------
 # 6. Hand off to the actual command
 # ----------------------------------------------------------------------------
+# cd into the admin template dir so Jinja2's FileSystemLoader("templates")
+# in server.py resolves correctly. Harmless for non-server CMDs.
+cd /opt/hermes-admin 2>/dev/null || true
 exec "$@"

@@ -34,6 +34,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # upstream commits.
 ARG HERMES_REF=v2026.5.16
 
+# Which praveen-ks-2001/hermes-agent-template revision to install. The
+# template provides the Starlette admin server (cookie auth gated by
+# ADMIN_USERNAME / ADMIN_PASSWORD) that wraps `hermes gateway` + `hermes
+# dashboard` and is our HTTP front door.
+#
+# Pinned to a SHA, not a branch — the upstream has no release tags and we
+# want reproducible rebuilds. To bump, check
+# https://github.com/praveen-ks-2001/hermes-agent-template/commits/main
+# and replace the SHA below.
+#
+# If we ever need to modify the dashboard (strip "Reset Config", reframe the
+# config editor for our git-tracked architecture, etc.) fork the upstream
+# and repoint the URL in the RUN below to the fork. Until then, we consume
+# unmodified.
+ARG HERMES_ADMIN_REF=935ead16bcf9905b06637058dd68fe3137775e8c
+
 # tini = tiny init that runs as PID 1. Without it, hermes's grandchild
 # processes (MCP stdio servers, git, bun, browser daemons spawned by tools)
 # reparent to PID 1 when their parents exit and pile up as zombies. After
@@ -72,10 +88,23 @@ RUN git clone --depth 1 --branch ${HERMES_REF} \
         https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent && \
     cd /opt/hermes-agent && \
     uv pip install --system --no-cache -e ".[all,messaging,tts-premium,honcho,bedrock,anthropic,edge-tts,hindsight]" && \
+    cd /opt/hermes-agent/web && \
+    npm install --silent --no-fund --no-audit --progress=false && \
+    npm run build && \
     cd /opt/hermes-agent/ui-tui && \
     npm install --silent --no-fund --no-audit --progress=false && \
     npm run build && \
-    rm -rf /opt/hermes-agent/web /opt/hermes-agent/.git /root/.npm
+    rm -rf /opt/hermes-agent/.git /root/.npm
+
+# Install the Railway admin template. Clones at a pinned SHA (see
+# HERMES_ADMIN_REF above), installs its Python deps, and drops .git. The
+# server.py inside becomes our CMD; on boot it spawns `hermes gateway` +
+# `hermes dashboard` and reverse-proxies them behind cookie auth.
+RUN git clone https://github.com/praveen-ks-2001/hermes-agent-template.git /opt/hermes-admin && \
+    cd /opt/hermes-admin && \
+    git checkout ${HERMES_ADMIN_REF} && \
+    rm -rf .git && \
+    uv pip install --system --no-cache -r requirements.txt
 
 # Points hermes at our pre-built TUI bundle. hermes's _make_tui_argv
 # checks HERMES_TUI_DIR first: if dist/entry.js exists there, it skips
@@ -101,7 +130,9 @@ RUN chmod +x /app/bootstrap.sh
 # cleanly terminates the entire tree, not just bootstrap.
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/app/bootstrap.sh"]
 
-# Default command — start Hermes as a long-running service. Override in
-# Railway's "Start Command" if you want a different mode (e.g. a messaging
-# gateway only, or TUI for debugging via `railway run`).
-CMD ["hermes", "serve"]
+# Default command — launch the admin server from the pinned template clone.
+# It binds the HTTP front door (cookie-auth gated by ADMIN_USERNAME /
+# ADMIN_PASSWORD), spawns `hermes gateway` + `hermes dashboard` as managed
+# subprocesses, and reverse-proxies them. bootstrap.sh `cd`s into
+# /opt/hermes-admin first so Jinja2 finds its templates/ directory.
+CMD ["python", "/opt/hermes-admin/server.py"]
