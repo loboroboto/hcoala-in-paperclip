@@ -1,9 +1,9 @@
 # hermes.toml — Hermes Agent configuration
 #
 # This file is the durable, git-tracked configuration for the agent's runtime
-# behavior. It is symlinked into ~/.hermes/hermes.toml by the bootstrap script
-# on container start, so a fresh Railway deploy reconstructs the full config
-# from the codebase.
+# behavior. It is symlinked into $HERMES_HOME/hermes.toml (=/data/hermes,
+# the persistent volume) by the bootstrap script on container start, so a
+# fresh Railway deploy reconstructs the full config from the codebase.
 #
 # Secrets (API keys, tokens) are NOT stored here — they come from Railway
 # environment variables and are read at runtime.
@@ -30,9 +30,12 @@ reasoning = "hermes-4-405b"
 
 [memory]
 # Episodic + semantic substrate. SQLite + FTS5 by default; lives on the
-# persistent volume so it survives redeploys.
+# persistent volume so it survives redeploys. Note: hermes resolves the
+# actual DB as $HERMES_HOME/state.db (HERMES_HOME=/data/hermes, the volume),
+# so this path is advisory — the runtime state lives at
+# /data/hermes/state.db regardless.
 enabled = true
-db_path = "/data/hermes/memory.db"
+db_path = "/data/hermes/state.db"
 # Auto-summarize sessions older than this into semantic claims via the
 # `coala-reflection` skill.
 auto_reflect_after_turns = 50

@@ -55,7 +55,7 @@ a specific Hermes mechanism (right).
 | CoALA primitive (§ in paper)               | Hermes substrate                              | Where it lives                                |
 |--------------------------------------------|-----------------------------------------------|-----------------------------------------------|
 | **Working memory** (§4.1)                  | Conversation context + context files          | runtime; `AGENTS.md` + `SOUL.md` always loaded |
-| **Episodic memory** (§4.1)                 | FTS5-indexed session history (SQLite)         | `/data/hermes/memory.db`                       |
+| **Episodic memory** (§4.1)                 | FTS5-indexed session history (SQLite)         | `/data/hermes/state.db`                        |
 | **Semantic memory** (§4.1)                 | Curated facts file + Honcho user model        | `/data/hermes/MEMORY.md`, `USER.md`            |
 | **Procedural memory — implicit** (§4.1)    | LLM weights                                   | provider (Nous Portal / OpenRouter / etc.)     |
 | **Procedural memory — explicit** (§4.1)    | Skills + AGENTS.md + decision scaffolds       | `/app/hermes-config/skills/` + `/data/hermes/skills/` |
@@ -93,12 +93,14 @@ The foundation is **declarative and re-applyable**. A fresh Railway deploy:
      won't clobber).
    - Copies seed skills into `/data/hermes/skills/` if missing (so agent
      patches to seed skills stick; set `HERMES_FORCE_RESEED=1` to force).
-   - Symlinks `~/.hermes/AGENTS.md`, `SOUL.md`, `hermes.toml`, `mcp.json`
+   - Points `HERMES_HOME` at the volume (`/data/hermes`) so hermes and the
+     admin server write **all** state (`state.db`, `.env`, `config.yaml`,
+     `sessions/`, `logs/`, …) directly onto the volume — **state persists
+     across deploys** with no per-file symlink to keep in sync.
+   - Symlinks `$HERMES_HOME/AGENTS.md`, `SOUL.md`, `hermes.toml`, `mcp.json`
      to the git-tracked `/app/` versions — **architecture is always fresh
-     from the repo**.
-   - Symlinks `~/.hermes/MEMORY.md`, `USER.md`, `PEERS.md`, `skills/`,
-     `memory.db`, `trajectories/`, `auth.json`, and the hermes-native
-     subdirs to the volume — **state persists across deploys**.
+     from the repo** — and aliases `~/.hermes` → the volume so any hardcoded
+     `~/.hermes/...` path still resolves there.
 4. Execs the CMD (`hermes serve`).
 
 The image bakes a **pinned hermes-agent version** (via the `HERMES_REF`
@@ -107,8 +109,8 @@ latest, so rebuilds are reproducible. Bump it deliberately when you want
 a new upstream.
 
 **What's on the volume (mutable, persistent):**
-`memory.db`, `MEMORY.md`, `USER.md`, `PEERS.md`, agent-authored skills,
-trajectories.
+`state.db` (episodic/session DB), `.env`, `config.yaml`, `MEMORY.md`,
+`USER.md`, `PEERS.md`, agent-authored skills, trajectories, sessions, logs.
 
 **What's in git (immutable, declarative):**
 the system prompt, SOUL.md, hermes.toml (including peer + channel
@@ -180,8 +182,8 @@ docker run --rm -it --env-file .env -v hermes-data:/data hermes-coala
 
 ### 2. Configure the volume in the Railway dashboard
 
-- **Mount path:** `/data` (must match `hermes.toml`'s paths)
-- **Size:** ≥ 1GB (memory.db + skills + trajectories grow over time)
+- **Mount path:** `/data` (must match `HERMES_HOME=/data/hermes`)
+- **Size:** ≥ 1GB (state.db + skills + trajectories grow over time)
 
 ### 3. Set required env vars
 

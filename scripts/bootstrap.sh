@@ -14,8 +14,10 @@
 #       mcp.json
 #       skills/<seed-skill>/SKILL.md ...
 #
-#   /data/hermes/              ← Railway persistent volume, MUTABLE
-#       memory.db              ← episodic + semantic (FTS5)
+#   /data/hermes/              ← Railway persistent volume, MUTABLE; this is
+#                                also HERMES_HOME, so hermes writes here directly
+#       state.db               ← episodic + semantic session DB (SQLite/FTS5)
+#       .env, config.yaml      ← admin-server runtime config + secrets
 #       MEMORY.md              ← curated semantic facts
 #       USER.md                ← Honcho-style user model
 #       PEERS.md               ← peer-agent semantic model (AGENTS.md §6)
@@ -26,24 +28,35 @@
 #       image_cache/, audio_cache/, workspace/, home/
 #                              ← hermes-native subdirs (created if missing)
 #
-#   ~/.hermes/                 ← Hermes runtime expects this; we SYMLINK
-#       AGENTS.md   → /app/hermes-config/AGENTS.md
-#       SOUL.md     → /app/hermes-config/SOUL.md
-#       hermes.toml → /app/hermes-config/hermes.toml
-#       mcp.json    → /app/hermes-config/mcp.json
-#       skills/     → /data/hermes/skills (volume-backed, merged with /app)
-#       memory.db, MEMORY.md, USER.md, PEERS.md, trajectories → /data/hermes/...
+#   HERMES_HOME = /data/hermes (the volume itself). hermes + the admin
+#       server resolve their home from $HERMES_HOME, so state.db, .env,
+#       config.yaml, sessions/, logs/, cron/, … are all written *directly*
+#       onto the persistent volume — no per-file symlink to keep in sync.
+#       Into that home we symlink only the read-only, git-tracked
+#       architecture:
+#           /data/hermes/AGENTS.md   → /app/hermes-config/AGENTS.md
+#           /data/hermes/SOUL.md     → /app/hermes-config/SOUL.md
+#           /data/hermes/hermes.toml → /app/hermes-config/hermes.toml
+#           /data/hermes/mcp.json    → /app/hermes-config/mcp.json
+#
+#   ~/.hermes/   → /data/hermes   (single alias). Any code path or skill doc
+#       that hardcodes ~/.hermes/... still lands on the volume.
 #
 # This split is the durability story:
 #   - Architecture lives in code (foundation = AGENTS.md + SOUL.md + seed skills).
 #   - State lives on the volume (episodic memory, learned skills, user model).
-#   - A fresh deploy reconstructs ~/.hermes from /app + /data on boot.
+#   - A fresh deploy points HERMES_HOME at the volume and symlinks the
+#     architecture in; all mutable state is already on /data, so nothing is
+#     lost across redeploys.
 
 set -euo pipefail
 
 CONFIG_DIR="/app/hermes-config"
 VOLUME_DIR="/data/hermes"
-HERMES_DIR="${HOME:-/root}/.hermes"
+# HERMES_HOME *is* the volume — hermes writes all state here directly. Honor
+# an externally-set HERMES_HOME (the Dockerfile sets it to /data/hermes) so
+# this stays in lockstep with the runtime's own home resolution.
+HERMES_DIR="${HERMES_HOME:-$VOLUME_DIR}"
 
 log() { printf '[bootstrap] %s\n' "$*" >&2; }
 
@@ -227,8 +240,12 @@ for skill in "${SEED_SKILLS[@]}"; do
 done
 
 # ----------------------------------------------------------------------------
-# 4. Wire ~/.hermes/ via symlinks
+# 4. Wire HERMES_HOME (the volume) and the ~/.hermes alias
 # ----------------------------------------------------------------------------
+# All mutable state (state.db, .env, config.yaml, sessions/, logs/, skills/,
+# …) is written by hermes/admin *directly* into HERMES_HOME = the volume, so
+# there is nothing to symlink for state — it's already persistent. We only
+# wire in the read-only, git-tracked architecture.
 mkdir -p "$HERMES_DIR"
 
 # Architecture files: symlink to git-tracked sources (always current).
@@ -237,25 +254,19 @@ ln -sfn "$CONFIG_DIR/SOUL.md"     "$HERMES_DIR/SOUL.md"
 ln -sfn "$CONFIG_DIR/hermes.toml" "$HERMES_DIR/hermes.toml"
 ln -sfn "$CONFIG_DIR/mcp.json"    "$HERMES_DIR/mcp.json"
 
-# State files / dirs: symlink to volume (mutable, persistent).
-ln -sfn "$VOLUME_DIR/MEMORY.md"     "$HERMES_DIR/MEMORY.md"
-ln -sfn "$VOLUME_DIR/USER.md"       "$HERMES_DIR/USER.md"
-ln -sfn "$VOLUME_DIR/PEERS.md"      "$HERMES_DIR/PEERS.md"
-ln -sfn "$VOLUME_DIR/skills"        "$HERMES_DIR/skills"
-ln -sfn "$VOLUME_DIR/memory.db"     "$HERMES_DIR/memory.db" 2>/dev/null || true
-ln -sfn "$VOLUME_DIR/trajectories"  "$HERMES_DIR/trajectories"
-ln -sfn "$VOLUME_DIR/sessions"      "$HERMES_DIR/sessions"
-ln -sfn "$VOLUME_DIR/logs"          "$HERMES_DIR/logs"
-ln -sfn "$VOLUME_DIR/pairing"       "$HERMES_DIR/pairing"
-ln -sfn "$VOLUME_DIR/cron"          "$HERMES_DIR/cron"
-ln -sfn "$VOLUME_DIR/hooks"         "$HERMES_DIR/hooks"
-ln -sfn "$VOLUME_DIR/plans"         "$HERMES_DIR/plans"
-ln -sfn "$VOLUME_DIR/image_cache"   "$HERMES_DIR/image_cache"
-ln -sfn "$VOLUME_DIR/audio_cache"   "$HERMES_DIR/audio_cache"
-ln -sfn "$VOLUME_DIR/workspace"     "$HERMES_DIR/workspace"
-ln -sfn "$VOLUME_DIR/auth.json"     "$HERMES_DIR/auth.json" 2>/dev/null || true
+# Alias ~/.hermes → the volume. hermes/admin use $HERMES_HOME explicitly, but
+# several skill docs and any code path that hardcodes ~/.hermes/... should
+# still resolve onto the volume. Skip when HOME already *is* the volume home
+# (i.e. HERMES_HOME=~/.hermes) to avoid a self-referential link.
+HOME_HERMES="${HOME:-/root}/.hermes"
+if [[ "$HOME_HERMES" != "$HERMES_DIR" ]]; then
+  # Safe to clobber: pre-exec in a fresh container, the real state lives on
+  # the volume this is about to point at.
+  rm -rf "$HOME_HERMES"
+  ln -sfn "$HERMES_DIR" "$HOME_HERMES"
+fi
 
-log "~/.hermes/ wired:"
+log "HERMES_HOME wired at $HERMES_DIR (~/.hermes → $HERMES_DIR):"
 ls -la "$HERMES_DIR" | sed 's/^/[bootstrap]   /' >&2
 
 # ----------------------------------------------------------------------------

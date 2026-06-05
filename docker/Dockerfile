@@ -3,7 +3,10 @@
 # Single-stage layout (uv-based):
 #   - Architecture lives in /app/hermes-config (read-only from agent's POV).
 #   - State lives in /data (Railway-mounted persistent volume).
-#   - Bootstrap reconstructs ~/.hermes/ from /app + /data on every boot.
+#   - HERMES_HOME points at the volume (/data/hermes), so hermes + the admin
+#     server write all state (state.db, .env, config.yaml, sessions, …)
+#     directly onto the persistent volume. Bootstrap symlinks the read-only
+#     architecture into that home and aliases ~/.hermes → the volume.
 #
 # Operational lessons borrowed from praveen-ks-2001/hermes-agent-template:
 #   - tini as PID 1 to reap zombies (long-uptime containers with MCP stdio
@@ -22,7 +25,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive \
     HOME=/root \
     HERMES_CONFIG_DIR=/app/hermes-config \
-    HERMES_DATA_DIR=/data/hermes
+    HERMES_HOME=/data/hermes
 
 # Which hermes-agent revision to install. Accepts any git ref the upstream
 # repo publishes — a release tag (recommended for reproducibility) or a

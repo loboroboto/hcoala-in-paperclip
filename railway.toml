@@ -28,7 +28,7 @@ restartPolicyMaxRetries = 10
 #
 # Configure the volume in the Railway dashboard:
 #   Mount path: /data
-#   Size: at least 1GB (memory.db + skills + trajectories grow over time)
+#   Size: at least 1GB (state.db + skills + trajectories grow over time)
 #
 # The volume is what makes the agent durable across redeploys. Without it,
 # every redeploy wipes episodic memory and learned skills.
