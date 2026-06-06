@@ -1,0 +1,42 @@
+# fleet/agents.yaml — declarative desired-state registry for the Paperclip fleet.
+#
+# This is the git-tracked source of truth the onboarder/reconciler (epic #8, slice
+# #14) reads at /app/fleet/agents.yaml and converges into Paperclip's live state
+# (Postgres). It is declarative + durable: after a Paperclip wipe, re-approving the
+# adapter lets the onboarder re-converge from this file with no manual edits.
+#
+# Field naming is camelCase to mirror the Paperclip `adapterConfig` keys 1:1, so the
+# field->config mapping is direct (see fleet/README.md for the full mapping table).
+#
+# IMPORTANT: `runnerAuthTokenEnv` names an ENV VAR. The onboarder reads that env var
+# and writes its literal VALUE into `adapterConfig.runnerAuthToken`. Paperclip has NO
+# `{{VAR}}` templating — never put a `{{...}}` reference here.
+
+# Defaults applied to every agent unless the agent overrides the same key.
+defaults:
+  paperclipApiUrl: http://paperclip.railway.internal:3100          # Paperclip API (CEO-key authed) the onboarder reconciles against
+  remoteRunnerUrl: http://hermes-interprets-coala.railway.internal:8788/run  # shared runner (Topology 1) — IPv6 private net, bind ::
+  runnerAuthTokenEnv: RUNNER_AUTH_TOKEN   # onboarder reads this env, writes the VALUE into adapterConfig.runnerAuthToken
+  persistSession: true
+  timeoutSec: 600
+  heartbeat: { enabled: true, intervalSec: 300 }   # -> runtimeConfig.heartbeat
+
+companies:
+  - id: cf698121-875b-45b1-b6e3-3832b8a9af51   # LOB — the first company
+    ceo: true                                  # first-company marker; its role:ceo agent is gated behind the human handshake (#20)
+    agents:
+      - name: hermes
+        existingId: 4c4080c6-8e95-4637-9b3e-45df1b3a0d15   # the live CEO agent to onboard (process -> hermes_remote)
+        role: ceo
+        hermesHome: /data/hermes/agents/4c4080c6-8e95-4637-9b3e-45df1b3a0d15   # -> adapterConfig.env.HERMES_HOME (per-agent CoALA home, #11)
+        # optional per-agent fields: model, skills, budgetMonthlyCents
+
+      # ---------------------------------------------------------------------------
+      # Topology 2 (scale-out) example — one runner service per agent. Uncomment and
+      # adjust to give an agent its own runner instead of the shared default above.
+      # The onboarder treats a per-agent `remoteRunnerUrl` as a distinct runner.
+      # ---------------------------------------------------------------------------
+      # - name: scout
+      #   role: worker
+      #   remoteRunnerUrl: http://hermes-scout.railway.internal:8788/run   # override: dedicated runner service
+      #   hermesHome: /data/hermes/agents/<scout-agent-id>

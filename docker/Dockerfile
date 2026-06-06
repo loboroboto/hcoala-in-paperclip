@@ -155,6 +155,10 @@ ENV HERMES_TUI_DIR=/opt/hermes-agent/ui-tui
 WORKDIR /app
 COPY hermes-config /app/hermes-config
 
+# Copy the git-tracked fleet desired-state registry so the onboarder/reconciler
+# (fleet epic #8, slice #14) can read it at /app/fleet/agents.yaml at runtime.
+COPY fleet /app/fleet
+
 # Copy bootstrap + fleet helpers and make executable. seed-hermes-home.sh is the
 # shared idempotent home-provisioner; hermes-fleet-entry.sh is the runner's
 # HERMES_CMD wrapper that seeds + isolates a per-agent home before exec'ing
