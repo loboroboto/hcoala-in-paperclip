@@ -179,6 +179,36 @@ else
 fi
 
 # ----------------------------------------------------------------------------
+# 5c. Fleet (#8/#14): paperclip onboarder/reconciler
+# ----------------------------------------------------------------------------
+# Reconciles the git-tracked fleet/agents.yaml into Paperclip: onboards the
+# pre-existing CEO agent onto the hermes_remote adapter (→ our runner above),
+# which clears Paperclip's "Process adapter missing command" heartbeat error.
+# Detection = reconcile success: the PATCH is rejected until the adapter is
+# installed (the single manual board gate, #12), then succeeds — so the same
+# call both detects and onboards.
+#
+# Auth is the CEO agent's bearer key. Mirror the HERMES_AUTH_JSON_BOOTSTRAP
+# pattern above: materialize it from PAPERCLIP_CEO_KEY once, chmod 600. $HOME
+# is /root here, so this writes /root/.pclip.key (where the onboarder looks).
+if [[ -n "${PAPERCLIP_CEO_KEY:-}" ]] && [[ ! -f "$HOME/.pclip.key" ]]; then
+  printf '%s' "$PAPERCLIP_CEO_KEY" > "$HOME/.pclip.key"
+  chmod 600 "$HOME/.pclip.key"
+  log "wrote $HOME/.pclip.key from PAPERCLIP_CEO_KEY"
+fi
+
+# Gated on PAPERCLIP_ONBOARD so the image boots normally when the fleet isn't
+# enabled. Single pass (--once) for now; the continuous loop is slice #15. Like
+# the runner, background it (reparents to tini on exec) and inherit stdio so its
+# logs land in `railway logs`.
+if [[ -n "${PAPERCLIP_ONBOARD:-}" ]]; then
+  python /app/paperclip-onboarder.py --once &
+  log "started paperclip onboarder (pid $!)"
+else
+  log "paperclip onboarder disabled (PAPERCLIP_ONBOARD unset)"
+fi
+
+# ----------------------------------------------------------------------------
 # 6. Hand off to the actual command
 # ----------------------------------------------------------------------------
 # cd into the admin template dir so Jinja2's FileSystemLoader("templates")

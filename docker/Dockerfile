@@ -144,6 +144,10 @@ RUN git clone https://github.com/ecologic-automate/paperclip-hermes-gateway.git 
     rm -rf .git && \
     uv pip install --system --no-cache 'aiohttp>=3.9'
 
+# Deps for the paperclip onboarder/reconciler (fleet #8/#14): YAML registry
+# parsing + HTTP. Installed explicitly (not relied on transitively).
+RUN uv pip install --system --no-cache pyyaml httpx
+
 # Points hermes at our pre-built TUI bundle. hermes's _make_tui_argv
 # checks HERMES_TUI_DIR first: if dist/entry.js exists there, it skips
 # the npm install/build entirely. Pre-building at image time avoids the
@@ -166,6 +170,8 @@ COPY fleet /app/fleet
 COPY scripts/bootstrap.sh /app/bootstrap.sh
 COPY scripts/seed-hermes-home.sh /app/seed-hermes-home.sh
 COPY scripts/hermes-fleet-entry.sh /app/hermes-fleet-entry.sh
+# The onboarder/reconciler (fleet #8/#14), launched via `python` from bootstrap §5c.
+COPY scripts/paperclip-onboarder.py /app/paperclip-onboarder.py
 RUN chmod +x /app/bootstrap.sh /app/seed-hermes-home.sh /app/hermes-fleet-entry.sh
 
 # The /data mount comes from the Railway volume at runtime; don't VOLUME
