@@ -57,4 +57,28 @@ case "$HOME_DIR" in
     ;;
 esac
 
-exec hermes "$@"
+# 3. Guard the resume session id. The hermes_remote adapter persists the parsed
+# session id and replays it as `--resume <id>`; its fallback parser can capture a
+# garbage id (notably the literal "from", from hermes's own "Use a session ID from
+# a previous CLI run" error text), and an id from a prior/other home won't exist
+# here either. Resuming a non-existent session hard-fails the whole run. So only
+# keep a --resume/-r whose session file actually exists in THIS home; otherwise
+# drop it and let hermes start fresh (which then persists a real id — self-healing).
+# Wording below avoids "session id"/"session saved" so it can't feed the adapter's
+# legacy regex if this run later errors.
+args=(); i=1
+while (( i <= $# )); do
+  cur="${!i}"
+  if [[ "$cur" == "--resume" || "$cur" == "-r" ]] && (( i < $# )); then
+    nxt=$((i + 1)); sid="${!nxt}"
+    if [[ -f "$HOME_DIR/sessions/session_$sid.json" ]]; then
+      args+=("$cur" "$sid")
+    else
+      printf '[fleet-entry] dropping stale --resume %q (no matching file in %s/sessions); starting fresh\n' "$sid" "$HOME_DIR" >&2
+    fi
+    i=$((i + 2)); continue
+  fi
+  args+=("$cur"); i=$((i + 1))
+done
+
+exec hermes "${args[@]}"
