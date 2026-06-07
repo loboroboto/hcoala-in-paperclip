@@ -198,12 +198,15 @@ if [[ -n "${PAPERCLIP_CEO_KEY:-}" ]] && [[ ! -f "$HOME/.pclip.key" ]]; then
 fi
 
 # Gated on PAPERCLIP_ONBOARD so the image boots normally when the fleet isn't
-# enabled. Single pass (--once) for now; the continuous loop is slice #15. Like
-# the runner, background it (reparents to tini on exec) and inherit stdio so its
-# logs land in `railway logs`.
+# enabled. Runs the continuous reconcile loop (slice #15): it re-converges after a
+# Paperclip adapter reset and onboards the CEO once the board adapter (#12) appears,
+# backing off while it waits. Tunable via PAPERCLIP_ONBOARD_INTERVAL /
+# PAPERCLIP_ONBOARD_BACKOFF_MAX (--once is the test-only single-pass mode). Like the
+# runner, background it (reparents to tini on exec) and inherit stdio so its logs land
+# in `railway logs`; `tini -g` forwards SIGTERM to it for a clean shutdown.
 if [[ -n "${PAPERCLIP_ONBOARD:-}" ]]; then
-  python /app/paperclip-onboarder.py --once &
-  log "started paperclip onboarder (pid $!)"
+  python /app/paperclip-onboarder.py &
+  log "started paperclip onboarder loop (pid $!)"
 else
   log "paperclip onboarder disabled (PAPERCLIP_ONBOARD unset)"
 fi
