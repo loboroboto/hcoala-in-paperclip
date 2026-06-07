@@ -45,7 +45,7 @@ if [[ ! -d "$CONFIG_DIR" ]]; then
   log "FATAL: $CONFIG_DIR not found — Dockerfile didn't copy hermes-config in."
   exit 1
 fi
-for f in AGENTS.md SOUL.md hermes.toml mcp.json; do
+for f in AGENTS.md SOUL.md hermes.toml mcp.json roles/ceo.md; do
   if [[ ! -f "$CONFIG_DIR/$f" ]]; then
     log "FATAL: $CONFIG_DIR/$f missing — config is incomplete."
     exit 1
@@ -222,3 +222,6 @@ ln -sfn "$CONFIG_DIR/AGENTS.md"   "$HOME_DIR/AGENTS.md"
 ln -sfn "$CONFIG_DIR/SOUL.md"     "$HOME_DIR/SOUL.md"
 ln -sfn "$CONFIG_DIR/hermes.toml" "$HOME_DIR/hermes.toml"
 ln -sfn "$CONFIG_DIR/mcp.json"    "$HOME_DIR/mcp.json"
+# Role overlays (role-agnostic foundation + per-role gates/duties; the agent reads
+# roles/<its-role>.md at runtime — see AGENTS.md §1.1). Whole dir symlinked.
+ln -sfn "$CONFIG_DIR/roles"       "$HOME_DIR/roles"
