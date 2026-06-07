@@ -33,7 +33,8 @@ updated or the agent is auto-created (slice #21). It never auto-installs board c
 Exit codes (single-pass / loop's per-pass classification):
   0  — reconciled or already in sync (no-op)
   75 — EX_TEMPFAIL: at least one agent is still waiting for the board adapter approval,
-       or its pinned id is absent (retryable; the loop backs off on this)
+       its pinned id is absent, or a CEO id could not be resolved from the key yet
+       (all retryable; the loop backs off on this)
   1  — hard error (bad config, missing creds/registry, unexpected I/O)
 
 Config (env):
@@ -228,6 +229,66 @@ def is_adapter_missing(resp: httpx.Response) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# CEO resolution (resolve the CEO agent id from the bearer key)
+# ---------------------------------------------------------------------------
+def resolve_ceo(client: httpx.Client) -> tuple[dict[str, Any] | None, str]:
+    """Resolve the CEO agent (id + companyId) the bearer key belongs to, with no
+    hardcoded id — so a freshly deployed Paperclip (new instance-generated ids)
+    bootstraps from the key alone.
+
+    Strategy (verified against paperclipai/paperclip docs + spike #9, all callable
+    with a CEO *agent* key):
+      1. GET /api/agents/me → the authenticated agent's record. If role=="ceo" that
+         IS the CEO; otherwise the CEO is the chainOfCommand entry with role=="ceo".
+      2. Fallback: GET /api/companies/{companyId}/agents and pick role=="ceo".
+
+    Returns ({"id":..., "companyId":...}, message) on success, (None, message) on
+    failure. Pure of logging + company-id validation — the caller does both.
+    """
+    try:
+        r = client.get("/api/agents/me")
+    except httpx.HTTPError as exc:
+        return None, f"resolve-ceo: GET /api/agents/me failed ({exc})"
+    if r.status_code != 200:
+        return None, f"resolve-ceo: GET /api/agents/me returned {r.status_code} {r.text[:200]}"
+    me = r.json()
+    company_id = me.get("companyId")
+
+    ceo_id = me.get("id") if me.get("role") == "ceo" else None
+    if not ceo_id:
+        for entry in me.get("chainOfCommand") or []:
+            if entry.get("role") == "ceo":
+                ceo_id = entry.get("id")
+                break
+    if not ceo_id and company_id:
+        # Deeper fallback: list the company's agents and find the CEO.
+        try:
+            lr = client.get(f"/api/companies/{company_id}/agents")
+            if lr.status_code == 200:
+                for a in lr.json() or []:
+                    if a.get("role") == "ceo":
+                        ceo_id = a.get("id")
+                        break
+        except httpx.HTTPError:
+            pass  # fall through to the no-CEO error below
+
+    if not ceo_id:
+        return None, ("resolve-ceo: no agent with role=ceo found via /me, chainOfCommand, "
+                      "or the company agent list")
+    return ({"id": ceo_id, "companyId": company_id},
+            f"resolve-ceo: CEO resolved to {ceo_id} (company {company_id})")
+
+
+def _resolve_ceo_cached(client: httpx.Client,
+                        cache: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    """resolve_ceo memoized for one reconcile pass (the /me lookup is key-global, so a
+    single call serves every resolveCeoFromKey company in the pass)."""
+    if "ceo" not in cache:
+        cache["ceo"] = resolve_ceo(client)
+    return cache["ceo"]
+
+
+# ---------------------------------------------------------------------------
 # Reconcile
 # ---------------------------------------------------------------------------
 def reconcile_agent(client: httpx.Client, agent_id: str, desired: dict[str, Any],
@@ -323,20 +384,42 @@ def _reconcile_pass(cfg: Config, api_url: str,
     timeout = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
 
     results: list[tuple[str, str, str]] = []
+    ceo_cache: dict[str, Any] = {}  # memoize the per-pass /api/agents/me resolution
     with httpx.Client(base_url=api_url, headers=headers, timeout=timeout) as client:
         for company in cfg.companies:
-            cid = company.get("id", "?")
+            cid = company.get("id")
+            cid_disp = cid or "?"
+            resolve_flag = bool(company.get("resolveCeoFromKey"))
             for agent in company.get("agents") or []:
-                agent_id = agent.get("existingId")
                 name = agent.get("name", "?")
+                agent_id = agent.get("existingId")
+                note = ""
+
+                # Bootstrap: a CEO agent with no pinned existingId resolves its id from
+                # the bearer key, so a fresh instance onboards with no hardcoded ids.
+                # existingId, when present, always wins (no surprise live switch).
+                if not agent_id and resolve_flag and agent.get("role") == "ceo":
+                    resolved, rmsg = _resolve_ceo_cached(client, ceo_cache)
+                    if resolved is None:
+                        results.append((f"{cid_disp}/{name}", "unresolved", f"{cid_disp}/{name}: {rmsg}"))
+                        continue
+                    rcompany = resolved.get("companyId")
+                    if cid and rcompany and cid != rcompany:
+                        results.append((f"{cid_disp}/{name}", "unresolved",
+                                        f"{cid_disp}/{name}: registry company {cid} != key's company "
+                                        f"{rcompany}; refusing cross-company onboard"))
+                        continue
+                    agent_id = resolved["id"]
+                    note = " (CEO resolved from key)"
+
                 if not agent_id:
-                    results.append((f"{cid}/{name}", "skipped",
-                                    f"{cid}/{name}: no existingId — skipping "
+                    results.append((f"{cid_disp}/{name}", "skipped",
+                                    f"{cid_disp}/{name}: no existingId — skipping "
                                     f"(agent creation is slice #21)"))
                     continue
                 desired = build_desired(cfg.defaults, agent, cfg.runner_token)
                 status, msg = reconcile_agent(client, agent_id, desired, dry_run)
-                results.append((agent_id, status, msg))
+                results.append((agent_id, status, msg + note))
     return results
 
 
@@ -344,7 +427,7 @@ def _pass_exit_code(results: list[tuple[str, str, str]]) -> int:
     statuses = [s for _, s, _ in results]
     if "error" in statuses:
         return EX_HARD
-    if "waiting" in statuses or "absent" in statuses:
+    if "waiting" in statuses or "absent" in statuses or "unresolved" in statuses:
         return EX_TEMPFAIL
     return EX_OK
 
@@ -353,7 +436,8 @@ def _summary(results: list[tuple[str, str, str]]) -> str:
     statuses = [s for _, s, _ in results]
     return (f"pass complete: {statuses.count('onboarded')} onboarded, "
             f"{statuses.count('synced')} in-sync, {statuses.count('waiting')} waiting, "
-            f"{statuses.count('absent')} absent, {statuses.count('error')} error(s)")
+            f"{statuses.count('absent')} absent, {statuses.count('unresolved')} unresolved, "
+            f"{statuses.count('error')} error(s)")
 
 
 def run_once(registry_path: str, api_url: str, dry_run: bool) -> int:

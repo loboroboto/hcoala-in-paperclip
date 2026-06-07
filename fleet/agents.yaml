@@ -25,9 +25,10 @@ defaults:
 companies:
   - id: cf698121-875b-45b1-b6e3-3832b8a9af51   # LOB — the first company
     ceo: true                                  # first-company marker; its role:ceo agent is gated behind the human handshake (#20)
+    resolveCeoFromKey: true                    # bootstrap: a role:ceo agent with no existingId is resolved from the CEO key (GET /api/agents/me). For a FRESH deploy, drop the pinned `id` above + `existingId` below and the onboarder bootstraps the CEO from the key alone — no hardcoded ids. existingId, when present, always wins.
     agents:
       - name: hermes
-        existingId: 4c4080c6-8e95-4637-9b3e-45df1b3a0d15   # the live CEO agent to onboard (process -> hermes_remote)
+        existingId: 4c4080c6-8e95-4637-9b3e-45df1b3a0d15   # the live CEO agent to onboard (process -> hermes_remote). PIN for THIS instance; overrides resolveCeoFromKey. Remove it (and the company `id`) to onboard the key-owner CEO instead / on a fresh instance.
         role: ceo
         hermesHome: /data/hermes/agents/4c4080c6-8e95-4637-9b3e-45df1b3a0d15   # optional override -> adapterConfig.env.HERMES_HOME. Authoritative source is PAPERCLIP_AGENT_ID, which hermes-fleet-entry.sh derives the home from (#11); Paperclip does not reliably persist adapterConfig.env, so this is belt-and-suspenders.
         # optional per-agent fields: model, skills, budgetMonthlyCents
