@@ -19,6 +19,7 @@ defaults:
   runnerAuthTokenEnv: RUNNER_AUTH_TOKEN   # onboarder reads this env, writes the VALUE into adapterConfig.runnerAuthToken
   persistSession: true
   timeoutSec: 600
+  model: deepseek/deepseek-v4-flash   # -> adapterConfig.model -> `hermes chat --model`; overrides the per-agent config.yaml default
   heartbeat: { enabled: true, intervalSec: 300 }   # -> runtimeConfig.heartbeat
 
 companies:

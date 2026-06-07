@@ -41,6 +41,7 @@ match 1:1):
 | `hermesHome`          | `adapterConfig.env.HERMES_HOME`      | per-agent CoALA home; the runner's `hermes-fleet-entry.sh` seeds + isolates it (#11) |
 | `persistSession`      | `adapterConfig.persistSession`       | |
 | `timeoutSec`          | `adapterConfig.timeoutSec`           | |
+| `model`               | `adapterConfig.model`                | adapter passes it to `hermes chat --model`; **overrides** the per-agent `~/.hermes/config.yaml` default (seeded from hermes's upstream `cli-config.yaml.example`) |
 | `heartbeat`           | `runtimeConfig.heartbeat`            | `{ enabled, intervalSec }` |
 | `existingId`          | the agent the reconcile targets      | onboard a pre-existing agent (vs. create) |
 | `role: ceo` + `ceo:`  | CEO special-casing                   | the CEO is gated behind the human handshake (#20) before it may act on the company |

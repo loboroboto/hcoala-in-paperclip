@@ -175,6 +175,14 @@ def build_desired(defaults: dict[str, Any], agent: dict[str, Any],
     if hermes_home:
         adapter_config["env"] = {"HERMES_HOME": hermes_home}
 
+    # Model: the adapter passes adapterConfig.model to `hermes chat` as --model,
+    # which overrides the per-agent ~/.hermes/config.yaml default (seeded from
+    # hermes's upstream cli-config.yaml.example). Without this, fleet agents run
+    # whatever that example hardcodes, NOT our chosen model.
+    model = merged.get("model")
+    if model:
+        adapter_config["model"] = model
+
     hb = merged.get("heartbeat", {}) or {}
     heartbeat = {
         "enabled": hb.get("enabled", True),
