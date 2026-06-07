@@ -22,16 +22,15 @@ api_key_env = "OPENROUTER_API_KEY"
 [model]
 # Default model for the main agent loop. For a strict-CoALA coding/DevOps
 # agent, prefer a model with strong tool-calling, long context, and good
-# instruction following. OpenRouter IDs are vendor-namespaced — these are the
-# same Hermes 4 models, routed via OpenRouter (swap to e.g. anthropic/claude-*
-# for stronger tool-calling if desired).
-default = "nousresearch/hermes-4-405b"
+# instruction following. OpenRouter IDs are vendor-namespaced (swap to e.g.
+# nousresearch/hermes-4-405b or anthropic/claude-* if desired).
+default = "deepseek/deepseek-v4-flash"
 # Subagent default — used when the main agent delegates. A smaller, faster
 # model is usually fine here.
-subagent = "nousresearch/hermes-4-70b"
+subagent = "deepseek/deepseek-v4-flash"
 # Reasoning model — invoked for explicit reasoning actions (CoALA §4.4)
 # when the agent self-selects extended thinking.
-reasoning = "nousresearch/hermes-4-405b"
+reasoning = "deepseek/deepseek-v4-flash"
 
 [memory]
 # Episodic + semantic substrate. SQLite + FTS5 by default; lives on the
