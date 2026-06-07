@@ -4,9 +4,9 @@
 # bootstrap.sh launches the paperclip-hermes-gateway runner with
 # HERMES_CMD=/app/hermes-fleet-entry.sh, so the runner invokes THIS script
 # (instead of `hermes` directly) for every POST /run. The runner forwards the
-# adapter's per-agent env — crucially HERMES_HOME=/data/hermes/agents/<agentId>
-# — but it CANNOT override HOME (HOME is in the runner's _PRESERVE set), so the
-# only place to give each agent its own ~/.hermes is right here.
+# adapter's per-agent env (incl. PAPERCLIP_AGENT_ID) but CANNOT override HOME
+# (HOME is in the runner's _PRESERVE set), so the only place to give each agent
+# its own home + ~/.hermes is right here.
 #
 # What it does, then hands off to the real hermes:
 #   1. Lazily, idempotently provision the agent's home from git-tracked config
@@ -16,13 +16,34 @@
 #      no cross-contamination via the global ~/.hermes alias bootstrap set for
 #      the main agent.
 #
-# A /run WITHOUT an env.HERMES_HOME override inherits the runner's HERMES_HOME
-# (the main home /data/hermes); the case guard leaves that on HOME=/root with
-# the existing global alias, so only true fleet homes get re-homed.
+# Home resolution (#11): the adapter's buildPaperclipEnv ALWAYS injects
+# PAPERCLIP_AGENT_ID (= the agent uuid) into the run env, independent of
+# adapterConfig — that is the RELIABLE per-agent signal. We do NOT depend on
+# adapterConfig.env.HERMES_HOME: Paperclip does not reliably persist/return that
+# nested value, and the runner's image sets a container default
+# HERMES_HOME=/data/hermes, so trusting HERMES_HOME alone silently runs every
+# agent in the shared main home (isolation never happens). So:
+#   - honor an explicit fleet-path HERMES_HOME if one actually came through, else
+#   - derive /data/hermes/agents/<PAPERCLIP_AGENT_ID>, else
+#   - fall back to HERMES_HOME (manual/non-Paperclip runs).
 
 set -euo pipefail
 
-HOME_DIR="${HERMES_HOME:?HERMES_HOME must be set by the adapter for fleet runs}"
+if [[ "${HERMES_HOME:-}" == /data/hermes/agents/* ]]; then
+  HOME_DIR="$HERMES_HOME"
+elif [[ -n "${PAPERCLIP_AGENT_ID:-}" ]]; then
+  # Path-safety: agent id is a uuid; reject anything with a slash or empty.
+  case "$PAPERCLIP_AGENT_ID" in
+    */* | "") echo "[fleet-entry] FATAL: bad PAPERCLIP_AGENT_ID ('$PAPERCLIP_AGENT_ID')" >&2; exit 1 ;;
+  esac
+  HOME_DIR="/data/hermes/agents/$PAPERCLIP_AGENT_ID"
+else
+  HOME_DIR="${HERMES_HOME:?HERMES_HOME or PAPERCLIP_AGENT_ID must be set for fleet runs}"
+fi
+
+# Re-export so hermes itself resolves its home here — the inherited HERMES_HOME is
+# the container default (/data/hermes) when we derive from PAPERCLIP_AGENT_ID.
+export HERMES_HOME="$HOME_DIR"
 
 # 1. Idempotent provisioning (single source of truth, shared with bootstrap).
 /app/seed-hermes-home.sh "$HOME_DIR"
