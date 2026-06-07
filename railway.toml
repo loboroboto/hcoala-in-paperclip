@@ -78,16 +78,23 @@ restartPolicyMaxRetries = 10
 #                               bundled wrapper /app/hermes-fleet-entry.sh (seeds
 #                               + isolates the per-agent home, then execs hermes).
 #                               Only override to bypass per-agent isolation.
-#   PAPERCLIP_ONBOARD        — set to enable the onboarder/reconciler (fleet #14).
-#                               When set, bootstrap runs one reconcile pass of
-#                               fleet/agents.yaml into Paperclip on boot, onboarding
-#                               the CEO agent onto hermes_remote. (Continuous loop is
-#                               slice #15.) Leave unset to keep the onboarder off.
+#   PAPERCLIP_ONBOARD        — set to enable the onboarder/reconciler (fleet #14/#15).
+#                               When set, bootstrap runs the continuous reconcile loop
+#                               over fleet/agents.yaml, onboarding the CEO agent onto
+#                               hermes_remote and re-converging after a Paperclip adapter
+#                               reset (it backs off while it waits for the board adapter,
+#                               #12). Leave unset to keep the onboarder off.
 #   PAPERCLIP_CEO_KEY        — CEO agent bearer key. Materialized once to
 #                               /root/.pclip.key (chmod 600); the onboarder uses it
 #                               to authenticate GET/PATCH /api/agents/{id}.
 #   PAPERCLIP_API_URL        — Paperclip API base for the onboarder; default
 #                               http://paperclip.railway.internal:3100.
+#   PAPERCLIP_ONBOARD_INTERVAL — loop sleep between reconcile passes, seconds. Default
+#                               300. Steady-state passes are no-ops and logged only on
+#                               state changes.
+#   PAPERCLIP_ONBOARD_BACKOFF_MAX — cap (s) for the exponential back-off applied while
+#                               the board adapter (#12) is absent or Paperclip is
+#                               transiently unreachable. Default 3600.
 #   HERMES_AUTH_JSON_BOOTSTRAP — JSON contents of a locally-generated
 #                               ~/.hermes/auth.json, written to the volume
 #                               on first boot. Use for OAuth-based providers
