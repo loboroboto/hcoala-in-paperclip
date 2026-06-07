@@ -1,0 +1,13 @@
+{
+  "name": "paperclip-hermes-remote-shim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "createServerAdapter() wrapper that registers ecologic-automate's hermes-remote-paperclip-adapter into Paperclip's no-fork external-adapter system. The gateway adapter is vendored into node_modules at install time (it is NOT published to npm) — see scripts/install-paperclip-adapter.sh.",
+  "exports": {
+    ".": "./index.js"
+  },
+  "dependencies": {
+    "hermes-remote-paperclip-adapter": "*"
+  }
+}
