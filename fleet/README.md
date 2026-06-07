@@ -15,13 +15,12 @@ This slice (#13) ships **data only** — no code reads it yet. The reconcile log
 defaults:        # applied to every agent unless the agent overrides the same key
   ...
 companies:
-  - id: <paperclip-company-uuid>
-    ceo: true    # first-company marker
+  - ceo: true              # first-company marker (no `id`: resolved from the CEO key)
+    resolveCeoFromKey: true
     agents:
       - name: <label>
-        existingId: <paperclip-agent-uuid>   # onboard an already-created agent
-        role: ceo|worker
-        hermesHome: /data/hermes/agents/<agentId>
+        role: ceo          # the CEO is resolved from the key; no hardcoded id
+        # existingId: …    # optional pin (supply via Railway env, not a literal — see #22)
 ```
 
 `defaults` provide fleet-wide values; any field set on an individual agent overrides
@@ -85,8 +84,9 @@ The CEO *creating subordinate agents* under itself is slice #21.
 
 - `runnerAuthTokenEnv` is an env-var **name**, never a secret value or a `{{...}}`
   reference — Paperclip resolves nothing at runtime.
-- UUIDs come from the live Paperclip instance (the CEO agent
-  `4c4080c6-8e95-4637-9b3e-45df1b3a0d15` in company
-  `cf698121-875b-45b1-b6e3-3832b8a9af51` / LOB).
+- **No hardcoded instance UUIDs in this repo** (it's open-source/shared). The CEO agent id
+  and company id are resolved at runtime from the CEO key (`GET /api/agents/me`) via
+  `resolveCeoFromKey`. If you must target a specific company/agent, supply it through a
+  Railway env var documented in the deployment template (slice #22) — not a literal here.
 - Editing the fleet = editing this file; the onboarder reconciles the change. Runtime
   growth driven by the CEO itself is slice #21.

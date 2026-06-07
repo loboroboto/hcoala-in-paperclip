@@ -74,6 +74,18 @@ EX_OK = 0
 EX_HARD = 1
 EX_TEMPFAIL = 75
 
+# Adapter-config keys Paperclip treats as board-only "instructions/bundle configuration":
+# an AGENT-key PATCH that ADDS or REMOVES any of these is rejected 403 (server agents.ts
+# KNOWN_INSTRUCTIONS_BUNDLE_KEYS). We never send them; we only avoid replaceAdapterConfig
+# when the CURRENT config has them, so a replace doesn't count as removing them.
+INSTRUCTIONS_BUNDLE_KEYS = (
+    "instructionsBundleMode",
+    "instructionsRootPath",
+    "instructionsEntryFile",
+    "instructionsFilePath",
+    "agentsMdPath",
+)
+
 # Set by the signal handler so a long back-off sleep aborts promptly on SIGTERM/SIGINT.
 # A plain bool (assignment is atomic) rather than threading.Event: the handler must do the
 # minimum async-signal-safe work — manipulating an Event's lock from a handler that
@@ -319,17 +331,30 @@ def reconcile_agent(client: httpx.Client, agent_id: str, desired: dict[str, Any]
         **(runtime_config.get("heartbeat") or {}),
         **desired["heartbeat"],
     }
-    payload = {
+    payload: dict[str, Any] = {
         "adapterType": desired["adapterType"],
         "adapterConfig": desired["adapterConfig"],
-        "replaceAdapterConfig": True,  # deterministic drift-restore (default is shallow merge)
         "runtimeConfig": runtime_config,
     }
+
+    # Merge mode: replaceAdapterConfig=True gives deterministic drift-restore, BUT Paperclip
+    # forbids an AGENT-key caller from REMOVING an agent's instruction-bundle keys
+    # (server agents.ts: a replace that drops a KNOWN_INSTRUCTIONS_BUNDLE_KEY → 403
+    # "Only board-authenticated callers can manage … bundle configuration"). The CEO agent
+    # (claude_local) carries those keys; a plain `general` agent does not. So we replace
+    # ONLY when the current config has none of them; otherwise we shallow-merge — our payload
+    # omits those keys, and on the adapterType flip Paperclip's preserveInstructionsBundleConfig
+    # carries them forward, so the CEO can be onboarded with the key (no board step).
+    current_cfg = current.get("adapterConfig") or {}
+    has_protected = any(k in current_cfg for k in INSTRUCTIONS_BUNDLE_KEYS)
+    if not has_protected:
+        payload["replaceAdapterConfig"] = True
+    merge_note = "" if not has_protected else " (merge mode — preserving board-protected instruction keys)"
 
     if dry_run:
         return "synced", (f"{agent_id}: DRY-RUN would PATCH → adapterType=hermes_remote, "
                          f"adapterConfig={_redact(desired['adapterConfig'])}, "
-                         f"heartbeat={desired['heartbeat']}")
+                         f"heartbeat={desired['heartbeat']}{merge_note}")
 
     try:
         patch = client.patch(f"/api/agents/{agent_id}", json=payload)
@@ -337,7 +362,7 @@ def reconcile_agent(client: httpx.Client, agent_id: str, desired: dict[str, Any]
         return "error", f"{agent_id}: PATCH failed ({exc})"
 
     if patch.status_code == 200:
-        return "onboarded", f"{agent_id}: onboarded → hermes_remote"
+        return "onboarded", f"{agent_id}: onboarded → hermes_remote{merge_note}"
     if is_adapter_missing(patch):
         return "waiting", (f"{agent_id}: waiting for board adapter approval (adapter not "
                           f"installed) [{patch.status_code}]")
@@ -411,6 +436,10 @@ def _reconcile_pass(cfg: Config, api_url: str,
                         continue
                     agent_id = resolved["id"]
                     note = " (CEO resolved from key)"
+                    # No pinned company id (the open-source default) → adopt the resolved one
+                    # so logs name the real company instead of "?".
+                    if not cid and rcompany:
+                        cid_disp = rcompany
 
                 if not agent_id:
                     results.append((f"{cid_disp}/{name}", "skipped",

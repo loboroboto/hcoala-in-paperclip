@@ -23,12 +23,16 @@ defaults:
   heartbeat: { enabled: true, intervalSec: 300 }   # -> runtimeConfig.heartbeat
 
 companies:
-  - id: cf698121-875b-45b1-b6e3-3832b8a9af51   # LOB — the first company (asserted against the key's companyId when the CEO is resolved)
-    ceo: true                                  # first-company marker; its role:ceo agent is gated behind the human handshake (#20)
-    resolveCeoFromKey: true                    # the role:ceo agent below has NO existingId → its id is resolved from the CEO key (GET /api/agents/me → the key-owner CEO). No hardcoded agent id. To pin a specific agent instead, add `existingId: <uuid>` (it overrides resolution).
+    # No company `id` here ON PURPOSE: this repo is open-source/shared, so it carries NO
+    # instance-specific UUIDs. The company is whatever the CEO key belongs to — resolved at
+    # runtime from GET /api/agents/me (companyId). To run a specific company/agent instead,
+    # supply it via a Railway env var documented in the deployment template (slice #22), not
+    # a literal here.
+  - ceo: true                                  # first-company marker; its role:ceo agent is gated behind the human handshake (#20)
+    resolveCeoFromKey: true                    # the role:ceo agent below has NO existingId → its id (and the company id) are resolved from the CEO key (GET /api/agents/me → the key-owner CEO). No hardcoded ids.
     agents:
       - name: hermes
-        role: ceo                              # resolved from the CEO key (the company's actual CEO, ade71ee0… on this instance). Was pinned to the role=general agent 4c4080c6 (now migrated away).
+        role: ceo                              # resolved from the CEO key = the company's actual CEO. (existingId, if ever set, overrides resolution.)
         # home is derived from PAPERCLIP_AGENT_ID by hermes-fleet-entry.sh (#11/#29); Paperclip's adapterConfig.env is wrapped+inert, so no hermesHome is set here.
         # optional per-agent fields: existingId (pin), model, skills, budgetMonthlyCents
 
