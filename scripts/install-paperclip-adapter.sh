@@ -119,6 +119,20 @@ mkdir -p "$SHIM_DIR/node_modules"
 mv "$GW_ADAPTER" "$SHIM_DIR/node_modules/hermes-remote-paperclip-adapter"
 rm -rf "$SRC_DIR/gw"
 
+# 4b. Harden the adapter's loose session-id FALLBACK regex. On a failed run it
+# scans stdout+stderr and the unanchored pattern matches hermes's OWN error text
+# "Use a session ID from a previous CLI run" -> captures "from", which then gets
+# persisted + replayed as `--resume from` (broke timer heartbeats; see #30). Anchor
+# it to line start (^ + /im) so only real "session_id:"/"Session saved:" lines (col 0)
+# match. The success path already uses the anchored ^session_id: regex. The
+# verify-grep makes a future adapter-SHA bump that changes this line fail loudly
+# rather than silently un-harden. (Runtime is also guarded by hermes-fleet-entry.sh #30.)
+EXEC="$SHIM_DIR/node_modules/hermes-remote-paperclip-adapter/dist/server/execute.js"
+sed -i 's#^const SESSION_ID_REGEX_LEGACY = .*#const SESSION_ID_REGEX_LEGACY = /^session[_ ](?:id|saved)[:\\s]+([a-zA-Z0-9_-]+)/im;#' "$EXEC"
+grep -qF 'SESSION_ID_REGEX_LEGACY = /^session' "$EXEC" \
+  || { log "FATAL: legacy-regex hardening did not apply (adapter source changed — re-check execute.js)"; exit 1; }
+log "hardened adapter session-id legacy regex (anchored ^…/im)"
+
 # 5. load-verify exactly as Paperclip's plugin-loader does (import → createServerAdapter → type)
 cat > "$SRC_DIR/.verify.mjs" <<'VEOF'
 const dir = process.argv[2];
