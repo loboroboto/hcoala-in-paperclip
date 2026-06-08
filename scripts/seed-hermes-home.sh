@@ -143,6 +143,7 @@ if [[ ! -f "$HOME_DIR/onboarding/state.json" ]]; then
   cat > "$HOME_DIR/onboarding/state.json" <<EOF
 {
   "humanOnboarded": false,
+  "gateActive": false,
   "agentId": "$agent_id",
   "firstContactAt": null,
   "onboardedAt": null,

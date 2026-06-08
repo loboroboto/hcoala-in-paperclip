@@ -31,6 +31,7 @@ so it is per-agent by construction (the fleet wrapper re-exports `HERMES_HOME` t
 ```json
 {
   "humanOnboarded": false,
+  "gateActive": false,
   "agentId": "<this agent's id>",
   "firstContactAt": null,
   "onboardedAt": null,
@@ -38,6 +39,12 @@ so it is per-agent by construction (the fleet wrapper re-exports `HERMES_HOME` t
   "channel": null
 }
 ```
+
+`gateActive` marks this agent as gated: set it `true` on your first provisional
+cycle. The fleet wrapper (`hermes-fleet-entry.sh`) reads it and, while
+`gateActive && !humanOnboarded`, forces a fresh session each run so this gate
+**re-fires every run** instead of resuming a session that might "remember" being
+onboarded (fleet #38).
 
 **Read it fail-closed:** missing, unreadable, malformed, or `humanOnboarded`
 anything other than literal `true` ⇒ treat as **ungated**.
@@ -63,15 +70,18 @@ state file is the only per-agent location.
    grounding action.
 2. **If `humanOnboarded` is `true`** ⇒ the gate is open. Exit this skill; resume
    the normal §4 decision cycle. Do **not** re-introduce yourself.
-3. **If ungated** ⇒ this is an **Escalate/await** state (§6.3): do no work.
-   - Compose the intro per `roles/ceo.md` "First-contact voice" — who you are,
-     that you are provisional, what you'd own, and that you're requesting go-ahead.
-     Set `firstContactAt` on the first such cycle.
-   - **Raise the go-ahead as a Paperclip `request_confirmation`** ("May I begin
-     operating this company?") using a **stable idempotency key** (e.g.
-     `confirmation:onboarding:<agentId>`) so it's created once and re-used, never
-     duplicated each wake. Emit the intro as the run's reply and end "awaiting
-     onboarding".
+3. **If ungated** ⇒ this is an **Escalate/await** state (§6.3): do no work. Ensure
+   `gateActive: true` is set in state.json (marks you gated for the wrapper, #38).
+   - **First contact only** (`firstContactAt` is null): compose the intro per
+     `roles/ceo.md` "First-contact voice" — who you are, that you are provisional,
+     what you'd own, that you're requesting go-ahead — set `firstContactAt`, and
+     **raise the go-ahead as a Paperclip `request_confirmation`** ("May I begin
+     operating this company?") with a **stable idempotency key**
+     (`confirmation:onboarding:<agentId>`) so it's created once, never duplicated.
+     Emit the intro as the run's reply and end "awaiting onboarding".
+   - **Subsequent provisional wakes** (`firstContactAt` already set): do NOT
+     re-post the intro (avoid heartbeat spam). Quietly re-check the confirmation's
+     status (step 4) and end "awaiting onboarding".
 4. **Check the confirmation's status from Paperclip** (a fact from the API, never
    your inference):
    - **Accepted by a human** ⇒ go to step 5.
