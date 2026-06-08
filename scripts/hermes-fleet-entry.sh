@@ -57,6 +57,30 @@ case "$HOME_DIR" in
     ;;
 esac
 
+# 2b. Gated-provisional guard (fleet #38). A role with an active activation gate
+# (e.g. the CEO) must re-run its gate on EVERY run — but persistSession makes the
+# adapter replay --resume and resume a session that may "remember" being onboarded,
+# defeating the gate. So while this agent is gated AND not yet onboarded, force a
+# fresh session (drop --resume) so the gate re-fires from a clean slate. Keyed on
+# onboarding/state.json fields the gate skill maintains: gateActive=true (set ONLY
+# by a gated role) + humanOnboarded!=true. Non-gated agents (no gateActive) keep
+# normal continuity; onboarded agents resume normally.
+force_fresh=0
+state_file="$HOME_DIR/onboarding/state.json"
+if [[ -f "$state_file" ]]; then
+  force_fresh=$(python - "$state_file" <<'PY' 2>/dev/null || echo 0
+import json, sys
+try:
+    s = json.load(open(sys.argv[1]))
+    print(1 if (s.get("gateActive") is True and s.get("humanOnboarded") is not True) else 0)
+except Exception:
+    print(0)
+PY
+)
+fi
+[[ "$force_fresh" == "1" ]] && \
+  printf '[fleet-entry] gated+provisional — forcing a fresh session (ignoring --resume) so the activation gate re-fires\n' >&2
+
 # 3. Guard the resume session id. The hermes_remote adapter persists the parsed
 # session id and replays it as `--resume <id>`; its fallback parser can capture a
 # garbage id (notably the literal "from", from hermes's own "Use a session ID from
@@ -71,10 +95,10 @@ while (( i <= $# )); do
   cur="${!i}"
   if [[ "$cur" == "--resume" || "$cur" == "-r" ]] && (( i < $# )); then
     nxt=$((i + 1)); sid="${!nxt}"
-    if [[ -f "$HOME_DIR/sessions/session_$sid.json" ]]; then
+    if [[ "$force_fresh" != "1" && -f "$HOME_DIR/sessions/session_$sid.json" ]]; then
       args+=("$cur" "$sid")
     else
-      printf '[fleet-entry] dropping stale --resume %q (no matching file in %s/sessions); starting fresh\n' "$sid" "$HOME_DIR" >&2
+      printf '[fleet-entry] dropping --resume %q (stale, or gated+provisional); starting fresh\n' "$sid" >&2
     fi
     i=$((i + 2)); continue
   fi
