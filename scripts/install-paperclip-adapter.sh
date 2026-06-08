@@ -108,6 +108,17 @@ export function createServerAdapter() {
     syncSkills,
     models,
     supportsLocalAgentJwt: true,
+    // Opt in to Paperclip's managed instructions bundle for hermes_remote (#42
+    // follow-up / option #2). With this true, Paperclip materializes + manages the
+    // per-agent bundle (maps companies-format agents/<role>/AGENTS.md on import,
+    // exposes the board editor, sets adapterConfig.instructionsFilePath). The gateway
+    // adapter's execute() then pull-reads that file SERVER-SIDE (inside Paperclip,
+    // where the volume lives) and prepends its content to the prompt — so the
+    // company-definition gate reaches the CoALA (remote) CEO. instructionsPathKey
+    // names the adapterConfig key holding the path (the adapter reads
+    // config.instructionsFilePath).
+    supportsInstructionsBundle: true,
+    instructionsPathKey: "instructionsFilePath",
     agentConfigurationDoc,
     detectModel: () => detectModel(),
   };

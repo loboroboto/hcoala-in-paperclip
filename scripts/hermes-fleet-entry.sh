@@ -29,6 +29,10 @@
 
 set -euo pipefail
 
+# Git-tracked architecture dir (must match seed-hermes-home.sh's CONFIG_DIR). Used as
+# the pure CoALA base when composing SOUL.md in step 4.
+CONFIG_DIR="/app/hermes-config"
+
 if [[ "${HERMES_HOME:-}" == /data/hermes/agents/* ]]; then
   HOME_DIR="$HERMES_HOME"
 elif [[ -n "${PAPERCLIP_AGENT_ID:-}" ]]; then
@@ -104,5 +108,63 @@ while (( i <= $# )); do
   fi
   args+=("$cur"); i=$((i + 1))
 done
+
+# 4. Relocate Paperclip company directives from the -q user prompt into SOUL.md
+# (system/identity context). Option #2 / Route R: when this agent has a Paperclip-
+# managed instructions bundle (adapterConfig.instructionsFilePath, set from the
+# company definition's agents/<role>/AGENTS.md), the hermes_remote adapter reads that
+# file SERVER-SIDE and PREPENDS it to the query as
+#   "<company AGENTS.md>\n\n---\n\n<wake prompt>"
+# That would land the company charter/gate in the USER message. Hermes loads SOUL.md
+# from HERMES_HOME as the first/identity section of the system prompt (stable tier,
+# cwd-independent; hermes.toml [context] does NOT apply to `hermes chat`), so we move
+# the company block there and strip it from -q. seed-hermes-home.sh re-points SOUL.md
+# at the git-tracked CoALA base on every run (just above), so we always recompose from
+# the pure base = CoALA identity + the current company directives (board edits to the
+# bundle flow through on the next run). Split on the LAST separator so a company doc
+# that itself contains a "---" rule isn't truncated (the short wake prompt won't carry
+# the full "\n\n---\n\n" sequence).
+qidx=-1
+for ((j = 0; j < ${#args[@]}; j++)); do
+  if [[ "${args[j]}" == "-q" || "${args[j]}" == "--query" ]]; then qidx=$((j + 1)); break; fi
+done
+if (( qidx >= 0 && qidx < ${#args[@]} )); then
+  qtmp="$(mktemp)"; printf '%s' "${args[qidx]}" > "$qtmp"
+  wake="$(HERMES_HOME="$HOME_DIR" COALA_SOUL="$CONFIG_DIR/SOUL.md" python3 - "$qtmp" <<'PY'
+import os, sys
+SEP = "\n\n---\n\n"
+prompt = open(sys.argv[1], encoding="utf-8").read()
+idx = prompt.rfind(SEP)
+if idx == -1:               # no company directive prepended — pass the prompt through
+    sys.stdout.write(prompt); sys.exit(0)
+company = prompt[:idx].strip()
+wake = prompt[idx + len(SEP):]
+home = os.environ["HERMES_HOME"]
+base = ""
+for p in (os.environ.get("COALA_SOUL", ""), os.path.join(home, "SOUL.md")):
+    try:
+        base = open(p, encoding="utf-8").read(); break
+    except Exception:
+        pass
+soul = (base.rstrip()
+        + "\n\n---\n\n# Company Charter & Operating Directives\n\n"
+        + "_Injected from the Paperclip company definition (instructions bundle); "
+        + "governs as system/identity context._\n\n" + company + "\n")
+tmp = os.path.join(home, "SOUL.md.fleet-tmp")
+with open(tmp, "w", encoding="utf-8") as f:
+    f.write(soul)
+os.replace(tmp, os.path.join(home, "SOUL.md"))   # replaces the seed symlink with a real file
+sys.stdout.write(wake)
+PY
+)"
+  rc=$?
+  rm -f "$qtmp"
+  if [[ $rc -eq 0 ]]; then
+    args[qidx]="$wake"
+    printf '[fleet-entry] relocated company directives into SOUL.md (system context); -q now carries only the wake prompt\n' >&2
+  else
+    printf '[fleet-entry] WARN: company-directive relocation failed (rc=%s); leaving -q unchanged\n' "$rc" >&2
+  fi
+fi
 
 exec hermes "${args[@]}"
