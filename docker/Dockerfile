@@ -163,6 +163,11 @@ COPY hermes-config /app/hermes-config
 # (fleet epic #8, slice #14) can read it at /app/fleet/agents.yaml at runtime.
 COPY fleet /app/fleet
 
+# Copy interchangeable Paperclip company packages: COMPANY.md, agents/<role>/AGENTS.md,
+# .paperclip.yaml. Read at build time only for #49 (S1); the company sync (S8, #56)
+# and selector wiring (S9, #57) will read from /app/companies at runtime.
+COPY companies /app/companies
+
 # Copy bootstrap + fleet helpers and make executable. seed-hermes-home.sh is the
 # shared idempotent home-provisioner; hermes-fleet-entry.sh is the runner's
 # HERMES_CMD wrapper that seeds + isolates a per-agent home before exec'ing
