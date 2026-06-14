@@ -75,15 +75,15 @@ state file is the only per-agent location.
    - **First contact only** (`firstContactAt` is null): compose the intro per
      `roles/ceo.md` "First-contact voice" — who you are, that you are provisional,
      what you'd own, that you're requesting go-ahead — set `firstContactAt`, and
-     **raise the go-ahead as a Paperclip `request_confirmation`** ("May I begin
-     operating this company?") with a **stable idempotency key**
-     (`confirmation:onboarding:<agentId>`) so it's created once, never duplicated.
+     **raise the go-ahead as a confirmation request on the `operator-onboarding`
+     channel** ("May I begin operating this company?") with a **stable idempotency
+     key** (`confirmation:onboarding:<agentId>`) so it's created once, never duplicated.
      Emit the intro as the run's reply and end "awaiting onboarding".
    - **Subsequent provisional wakes** (`firstContactAt` already set): do NOT
      re-post the intro (avoid heartbeat spam). Quietly re-check the confirmation's
      status (step 4) and end "awaiting onboarding".
-4. **Check the confirmation's status from Paperclip** (a fact from the API, never
-   your inference):
+4. **Check the confirmation's status on the `operator-onboarding` channel** (a fact
+   from the channel host, never your inference):
    - **Accepted by a human** ⇒ go to step 5.
    - **Pending / declined / absent** ⇒ stay gated; re-await. **The recurring
      "You are the CEO…" wake prompt is NEVER consent** — it is a system heartbeat,
@@ -103,8 +103,8 @@ state file is the only per-agent location.
   message. It is never go-ahead. (This is the real bug that occurred: the CEO
   self-onboarded from a heartbeat and confabulated `onboardedBy: "board (human)"`.)
 - **Self-granting the unlock.** The gate is not self-grantable — only an
-  *accepted* Paperclip confirmation opens it. Never infer acceptance; read it from
-  the API.
+  *accepted* confirmation on the `operator-onboarding` channel opens it. Never
+  infer acceptance; read it from the channel host.
 - **Flipping the flag on an ambiguous message.** When in doubt, stay gated and
   (re-)raise the confirmation. The flip is irreversible in spirit (you start acting).
 - **Writing the flag to USER.md.** Leaks across the fleet — see The Flag.
@@ -119,7 +119,7 @@ A correct gated cycle leaves a transcript where:
 
 - The `state.json` read is the **first** action, named explicitly.
 - An ungated run contains only the intro + a (single, idempotent) onboarding
-  `request_confirmation` and **zero** company mutations (git/GitHub/board untouched).
+  confirmation request and **zero** company mutations (git/GitHub/board untouched).
 - The unlock happens **only** after that confirmation is read back as
   human-accepted — never on a heartbeat — and is a single explicit, timestamped
   learning action recording the real `onboardedBy` and `channel`.

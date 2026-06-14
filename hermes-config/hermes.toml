@@ -182,23 +182,24 @@ etiquette = "state-change-only,no-narration"
 
 # --- Live: human onboarding surface (fleet #20) ---
 
-# The human channel the onboarding handshake runs over. For fleet agents this is
-# Paperclip itself: each run's reply IS the message to the human, and the human's
-# reply comes back as the next /run (the agent is invoked on-demand, so it has no
+# The human channel the onboarding handshake runs over. The transport is the
+# agent's run-reply mechanism, supplied by whichever runner hosts the agent:
+# each run's reply IS the message to the human, and the human's reply comes
+# back as the next /run (the agent is invoked on-demand, so it has no
 # long-running inbound listener — see [messaging] below). The
-# human-onboarding-handshake skill and AGENTS.md §1.1 reason over this channel
-# while the agent is provisional.
+# human-onboarding-handshake skill and AGENTS.md §1.1 reason over this
+# channel while the agent is provisional. The concrete transport is bound
+# by the downstream deployment.
 [[channels.channel]]
 id = "operator-onboarding"
 kind = "human"
 direction = "sync"
 visibility = "private"
-transport_ref = "paperclip"   # delivered as the run reply; no separate transport wired
+transport_ref = "host-runner-reply"   # delivered as the agent's run reply; no separate transport wired (host-runner-bound)
 etiquette = "terse,one-question,await-go-ahead"
 
 # To add a non-GitHub channel, append a [[channels.channel]] block with
 # kind/direction/visibility/transport_ref/etiquette (see AGENTS.md §6.2).
-# (Prior paperclip/multica examples are in git history.)
 
 [messaging]
 # Runtime gateway plumbing for human-facing DM bots. Distinct from
