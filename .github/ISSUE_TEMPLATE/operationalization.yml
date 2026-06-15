@@ -1,0 +1,52 @@
+name: Paperclip operationalization
+description: Fleet, companies, onboarder/reconciler, runner/gateway, Railway/env, or the composing Dockerfile.
+title: "[ops] "
+labels: ["scope: downstream"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repo is the **Paperclip operationalization** of the upstream substrate.
+        File issues here for the machinery that runs the substrate as a Paperclip fleet.
+
+        Changes to the substrate itself — `AGENTS.md`, `SOUL.md`, `hermes.toml`,
+        `mcp.json`, seed skills, the cognitive / decision-cycle model — belong
+        **upstream** in
+        [hermes-interprets-coala](https://github.com/loboroboto/hermes-interprets-coala/issues/new/choose)
+        (use the "Substrate change" entry on this repo's issue chooser if you're unsure).
+        See [CONTRIBUTING.md](https://github.com/loboroboto/hcoala-in-paperclip/blob/main/CONTRIBUTING.md)
+        for the boundary test.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Operationalization area
+      description: Which part of the Paperclip layer does this touch?
+      options:
+        - paperclip-hermes-gateway runner
+        - onboarder / reconciler (paperclip-onboarder.py)
+        - fleet registry (fleet/agents.yaml)
+        - companies/ (interchangeable company packages)
+        - role ports
+        - Railway / .env deployment surface
+        - composing Dockerfile (HCOALA_REF / HERMES_REF)
+        - docs
+        - Other / cross-cutting
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What should change?
+      description: Describe the operationalization change.
+    validations:
+      required: true
+  - type: textarea
+    id: why-downstream
+    attributes:
+      label: Why does this belong downstream?
+      description: >-
+        Confirm this is Paperclip operationalization, not a substrate change. If the
+        real fix is in the substrate, file it upstream instead (or split out the
+        substrate part).
+    validations:
+      required: true

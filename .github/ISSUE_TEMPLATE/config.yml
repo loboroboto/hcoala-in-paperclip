@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Substrate change (upstream — hermes-interprets-coala)
+    url: https://github.com/loboroboto/hermes-interprets-coala/issues/new/choose
+    about: >-
+      Changing AGENTS.md, SOUL.md, hermes.toml, mcp.json, the seed skills, or the
+      cognitive / decision-cycle model? That is the CoALA substrate — file it
+      upstream. It propagates here via HCOALA_REF; it cannot start downstream.
