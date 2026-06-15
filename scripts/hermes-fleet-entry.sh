@@ -70,7 +70,7 @@ esac
 # by a gated role) + humanOnboarded!=true. Non-gated agents (no gateActive) keep
 # normal continuity; onboarded agents resume normally.
 force_fresh=0
-state_file="$HOME_DIR/onboarding/state.json"
+state_file="${HERMES_ONBOARDING_STATE_PATH:-$HOME_DIR/onboarding/state.json}"
 if [[ -f "$state_file" ]]; then
   force_fresh=$(python - "$state_file" <<'PY' 2>/dev/null || echo 0
 import json, sys
