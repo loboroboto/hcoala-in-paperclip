@@ -1,14 +1,25 @@
-# Hermes Agent — CoALA Oriented Foundation
+# hcoala-in-paperclip — Paperclip-flavored downstream of `hermes-interprets-coala`
 
-A Hermes Agent ([NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)) deployment whose
-foundational configuration is explicitly oriented towards the **Cognitive
-Architectures for Language Agents (CoALA)** framework — Sumers, Yao,
-Narasimhan & Griffiths, [arXiv:2309.02427v3](https://arxiv.org/html/2309.02427v3).
+A [Hermes Agent](https://github.com/NousResearch/hermes-agent) deployment
+that **consumes** the CoALA-aligned substrate at
+[`loboroboto/hermes-interprets-coala`](https://github.com/loboroboto/hermes-interprets-coala)
+and adds the operationalization that runs it as a Paperclip-platform fleet
+agent: the `paperclip-hermes-gateway` runner, the fleet onboarder/reconciler,
+the per-agent home wrapper, the interchangeable `companies/` packages.
 
-Hermes provides the substrate (skills, memory, tools, MCP, messaging
-gateways). CoALA provides the schema imposed on that substrate. The pairing
-is durable, git-tracked, and reconstitutes a fresh Railway deploy into the
-same architecture on every boot.
+The substrate (AGENTS.md, SOUL.md, hermes.toml, mcp.json, seed skills,
+bootstrap, home provisioner) lives in the upstream and is materialized into
+this image at build time via `ARG HCOALA_REF` — bump the ref to pull a new
+upstream commit. See the upstream README for the **Cognitive Architectures
+for Language Agents (CoALA)** mapping (Sumers, Yao, Narasimhan & Griffiths,
+[arXiv:2309.02427v3](https://arxiv.org/html/2309.02427v3)) and the durability
+story for what state belongs in git vs the persistent volume.
+
+This repo owns: the Dockerfile that composes upstream + paperclip; the
+Paperclip operationalization (runner, onboarder, fleet wrapper); the fleet
+registry (`fleet/agents.yaml`); the interchangeable company packages
+(`companies/`); the boot-time launches (`scripts/bootstrap-overlay.d/paperclip.sh`);
+and the Railway/`.env` deployment surface.
 
 ---
 
@@ -16,34 +27,50 @@ same architecture on every boot.
 
 ```
 .
-├── README.md                       ← you are here
-├── railway.toml                    ← Railway build/deploy config
-├── .env.example                    ← committed template; copy to .env for local dev
+├── README.md                                ← you are here
+├── railway.toml                             ← Railway build/deploy config
+├── .env.example                             ← committed template; copy to .env for local dev
 ├── .dockerignore
 ├── .gitignore
 │
 ├── docker/
-│   └── Dockerfile                  ← uv + tini + pinned Hermes + pre-built ui-tui + Railway CLI
+│   └── Dockerfile                           ← composes upstream + paperclip; pins HCOALA_REF
 │
 ├── scripts/
-│   └── bootstrap.sh                ← idempotent setup on every container boot
+│   ├── bootstrap-overlay.d/
+│   │   └── paperclip.sh                     ← boot-time launches: runner + onboarder
+│   ├── hermes-fleet-entry.sh                ← per-agent HERMES_CMD wrapper (slices the runner spawns)
+│   ├── paperclip-onboarder.py               ← reconciler loop: fleet/agents.yaml → Paperclip
+│   └── install-paperclip-adapter.sh         ← host-side helper; not in image
 │
-└── hermes-config/                  ← THE ARCHITECTURE (git-tracked, durable)
-    ├── AGENTS.md                   ← CoALA system prompt (memory, actions, decision cycle, group ops)
-    ├── SOUL.md                     ← personality / voice
-    ├── hermes.toml                 ← provider, model, paths, toolsets, [peers], [channels]
-    ├── mcp.json                    ← MCP grounding-action surfaces (github live; others commented)
-    └── skills/                     ← seed procedural memory
-        ├── coala-decision-cycle/      ← META — the loop, made explicit
-        ├── coala-skill-induction/     ← META — how to write a skill (procedural learning)
-        ├── coala-reflection/          ← META — episodic → semantic promotion
-        ├── group-agent-coordination/  ← META — peer claims, hand-offs, conflict resolution
-        ├── channel-aware-messaging/   ← META — pick the right channel; respect etiquette
-        ├── deploy-railway/            ← DOMAIN — Railway deploys
-        ├── debug-incident/            ← DOMAIN — production incident triage
-        ├── github-projects-ops/       ← DOMAIN — issues, PRs, projects, milestones
-        └── write-quality-code/        ← DOMAIN — coding defaults
+├── fleet/
+│   ├── agents.yaml                          ← desired-state registry the onboarder reconciles
+│   └── README.md
+│
+└── companies/                               ← interchangeable Paperclip company packages
+    ├── README.md
+    └── agentsys-coala/                      ← the reference company (COMPANY.md + .paperclip.yaml + LICENSE)
 ```
+
+The CoALA-aligned substrate (`AGENTS.md`, `SOUL.md`, `hermes.toml`, `mcp.json`,
+seed skills, `bootstrap.sh`, `seed-hermes-home.sh`) is **not** in this repo —
+the Dockerfile clones it from `loboroboto/hermes-interprets-coala` at build
+time (see [Upstream substrate](#upstream-substrate)) and materializes it into
+`/app/` alongside the paperclip-owned files above.
+
+## Upstream substrate
+
+The Dockerfile pins an `HCOALA_REF` (default `v2026.6.15`, matching the
+upstream's `vYYYY.M.D` tag convention) and `git clone`s that ref into
+`/opt/hcoala/` during the build. A subsequent `cp -r` materializes
+`hermes-config/`, `bootstrap.sh`, and `seed-hermes-home.sh` into `/app/`,
+where the rest of the boot sequence and the paperclip overlay run against
+them exactly as if they lived in this repo.
+
+**Bumping the substrate:** check
+[the upstream's releases](https://github.com/loboroboto/hermes-interprets-coala/releases),
+update `ARG HCOALA_REF=` in `docker/Dockerfile`, redeploy. A new ref pulls
+the new commit's bootstrap, skills, AGENTS.md, etc. into the next build.
 
 ---
 
@@ -77,7 +104,8 @@ own schema.
 The foundation is **declarative and re-applyable**. A fresh Railway deploy:
 
 1. Builds the image from `docker/Dockerfile` — installs Hermes, Railway CLI,
-   and copies `hermes-config/` into `/app/`.
+   clones the upstream substrate at the pinned `HCOALA_REF` into `/opt/hcoala/`,
+   and `cp`s `hermes-config/` + the bootstrap scripts into `/app/`.
 2. Mounts the persistent volume at `/data`.
 3. Runs `scripts/bootstrap.sh` (the ENTRYPOINT, wrapped in `tini` as PID 1
    so MCP stdio servers and other subprocess fanout get reaped cleanly and
@@ -98,9 +126,9 @@ The foundation is **declarative and re-applyable**. A fresh Railway deploy:
      `sessions/`, `logs/`, …) directly onto the volume — **state persists
      across deploys** with no per-file symlink to keep in sync.
    - Symlinks `$HERMES_HOME/AGENTS.md`, `SOUL.md`, `hermes.toml`, `mcp.json`
-     to the git-tracked `/app/` versions — **architecture is always fresh
-     from the repo** — and aliases `~/.hermes` → the volume so any hardcoded
-     `~/.hermes/...` path still resolves there.
+     to the upstream-materialized `/app/` versions — **architecture is
+     always fresh from the pinned `HCOALA_REF`** — and aliases `~/.hermes`
+     → the volume so any hardcoded `~/.hermes/...` path still resolves there.
 4. Execs the CMD (`hermes serve`).
 
 The image bakes a **pinned hermes-agent version** (via the `HERMES_REF`
@@ -256,9 +284,12 @@ railway run -- hermes --tui
 
 ---
 
-## Modifying the Architecture
+## Modifying behavior
 
-Because the architecture is git-tracked, all changes are PR-reviewable.
+Architecture changes split across two repos depending on what you're
+changing.
+
+**Substrate changes (upstream PR on `hermes-interprets-coala`):**
 
 | To change…                                  | Edit                                          |
 |---------------------------------------------|-----------------------------------------------|
@@ -270,18 +301,35 @@ Because the architecture is git-tracked, all changes are PR-reviewable.
 | Group-agent peers and channels              | `hermes-config/hermes.toml` `[peers]` / `[channels]` (see [Group Operation](#group-operation)) |
 | Seed procedural knowledge                   | `hermes-config/skills/<name>/SKILL.md` (add/edit) |
 | Where state persists                        | `hermes-config/hermes.toml` paths + `bootstrap.sh` symlinks |
+| The bootstrap or home-provisioner itself    | `scripts/bootstrap.sh` / `scripts/seed-hermes-home.sh` |
+
+Land upstream, tag, then bump `HCOALA_REF` in this repo's Dockerfile to pull
+the change.
+
+**Downstream (paperclip) changes (PR on this repo):**
+
+| To change…                                  | Edit                                          |
+|---------------------------------------------|-----------------------------------------------|
+| Boot-time launches (runner, onboarder)      | `scripts/bootstrap-overlay.d/paperclip.sh`     |
+| Per-agent isolation / fleet wrapper         | `scripts/hermes-fleet-entry.sh`                |
+| Fleet desired-state                         | `fleet/agents.yaml`                            |
+| Onboarder/reconciler logic                  | `scripts/paperclip-onboarder.py`               |
+| Company packages                            | `companies/<slug>/`                            |
+| Image composition (incl. `HCOALA_REF` bump) | `docker/Dockerfile`                            |
+| Railway env-var surface                     | `railway.toml`, `.env.example`                 |
 
 Commit, push, redeploy. Bootstrap is idempotent — re-running it never
 destroys volume state.
 
 **Dashboard vs git-tracked architecture.** The web admin can edit *runtime
 state on the volume* — operator-set secrets in `/data/hermes/.env`,
-gateway lifecycle, pairing approvals. It does **not** edit
-`hermes-config/*`. Those files are git-tracked, symlinked from `/app`, and
-the source of truth for architecture (provider type, peer/channel
+gateway lifecycle, pairing approvals. It does **not** edit the substrate
+files materialized into `/app/`. Those come from the pinned upstream ref
+and are the source of truth for architecture (provider type, peer/channel
 registries, toolsets, seed skills, safety policies). Dashboard config
 changes do not round-trip into git — if you want a change to survive a
-volume wipe, make it in `hermes-config/` and redeploy.
+volume wipe, land it as either an upstream substrate PR or a downstream
+overlay change here and redeploy.
 
 ---
 

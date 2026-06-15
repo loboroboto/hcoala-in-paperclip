@@ -1,12 +1,18 @@
-# railway.toml — Railway service configuration for the Hermes Agent.
+# railway.toml — Railway service configuration for the paperclip downstream.
 #
 # This file lives at the repo root and tells Railway how to build and run.
 # Volume configuration is done in the Railway dashboard (the volume mount
-# path must match /data — see hermes-config/hermes.toml).
+# path must match /data — see the upstream hermes-interprets-coala's
+# hermes-config/hermes.toml, materialized into the image at build time).
 
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "docker/Dockerfile"
+# The Dockerfile pins the upstream CoALA-aligned Hermes substrate via
+# ARG HCOALA_REF (default v2026.6.15). Bumping the default in the Dockerfile
+# is the standard upgrade path; Railway also accepts build-time --build-arg
+# overrides via the project settings if you need to pin a different ref
+# without changing source.
 
 [deploy]
 # Healthcheck — the admin server (server.py from the pinned template clone)
