@@ -137,68 +137,24 @@ fi
 log "bootstrap complete."
 
 # ----------------------------------------------------------------------------
-# 5b. Fleet (#8/#10): paperclip-hermes-gateway runner
+# 5b. Bootstrap overlays (downstream extension point)
 # ----------------------------------------------------------------------------
-# Exposes the hermes_remote endpoint Paperclip calls to spawn `hermes` over the
-# Railway private network (GET /health, POST /run with Bearer RUNNER_AUTH_TOKEN).
-# Gated on RUNNER_AUTH_TOKEN so the image still boots normally when the fleet
-# isn't enabled (the runner exits 1 without a token). We background it and let
-# it inherit stdout/stderr so its banner + run logs show up in `railway logs`;
-# when we exec the CMD below the runner reparents to tini (PID 1), and `tini -g`
-# forwards SIGTERM to the whole group for clean shutdown.
-#
-# Bind :: — Railway private networking is IPv6; :: is dual-stack on Linux, and
-# you can't bind :: and 0.0.0.0 at once.
-#
-# HERMES_CMD points the runner at our fleet wrapper (hermes-fleet-entry.sh)
-# instead of `hermes` directly, so every /run lazily provisions a per-agent home
-# from the adapter's HERMES_HOME=/data/hermes/agents/<agentId> and isolates that
-# agent's ~/.hermes before exec'ing hermes (slice #11). An externally-set
-# HERMES_CMD still wins.
-if [[ -n "${RUNNER_AUTH_TOKEN:-}" ]]; then
-  if [[ -f /opt/paperclip-runner/runner/server.py ]]; then
-    HERMES_CMD="${HERMES_CMD:-/app/hermes-fleet-entry.sh}" \
-    RUNNER_HOST="${RUNNER_HOST:-::}" RUNNER_PORT="${RUNNER_PORT:-8788}" \
-      python /opt/paperclip-runner/runner/server.py &
-    log "started paperclip runner (pid $!) on [${RUNNER_HOST:-::}]:${RUNNER_PORT:-8788} (HERMES_CMD=${HERMES_CMD:-/app/hermes-fleet-entry.sh})"
-  else
-    log "WARN: RUNNER_AUTH_TOKEN set but /opt/paperclip-runner/runner/server.py missing — runner not started"
-  fi
-else
-  log "paperclip runner disabled (RUNNER_AUTH_TOKEN unset)"
-fi
-
-# ----------------------------------------------------------------------------
-# 5c. Fleet (#8/#14): paperclip onboarder/reconciler
-# ----------------------------------------------------------------------------
-# Reconciles the git-tracked fleet/agents.yaml into Paperclip: onboards the
-# pre-existing CEO agent onto the hermes_remote adapter (→ our runner above),
-# which clears Paperclip's "Process adapter missing command" heartbeat error.
-# Detection = reconcile success: the PATCH is rejected until the adapter is
-# installed (the single manual board gate, #12), then succeeds — so the same
-# call both detects and onboards.
-#
-# Auth is the CEO agent's bearer key. Mirror the HERMES_AUTH_JSON_BOOTSTRAP
-# pattern above: materialize it from PAPERCLIP_CEO_KEY once, chmod 600. $HOME
-# is /root here, so this writes /root/.pclip.key (where the onboarder looks).
-if [[ -n "${PAPERCLIP_CEO_KEY:-}" ]] && [[ ! -f "$HOME/.pclip.key" ]]; then
-  printf '%s' "$PAPERCLIP_CEO_KEY" > "$HOME/.pclip.key"
-  chmod 600 "$HOME/.pclip.key"
-  log "wrote $HOME/.pclip.key from PAPERCLIP_CEO_KEY"
-fi
-
-# Gated on PAPERCLIP_ONBOARD so the image boots normally when the fleet isn't
-# enabled. Runs the continuous reconcile loop (slice #15): it re-converges after a
-# Paperclip adapter reset and onboards the CEO once the board adapter (#12) appears,
-# backing off while it waits. Tunable via PAPERCLIP_ONBOARD_INTERVAL /
-# PAPERCLIP_ONBOARD_BACKOFF_MAX (--once is the test-only single-pass mode). Like the
-# runner, background it (reparents to tini on exec) and inherit stdio so its logs land
-# in `railway logs`; `tini -g` forwards SIGTERM to it for a clean shutdown.
-if [[ -n "${PAPERCLIP_ONBOARD:-}" ]]; then
-  python /app/paperclip-onboarder.py &
-  log "started paperclip onboarder loop (pid $!)"
-else
-  log "paperclip onboarder disabled (PAPERCLIP_ONBOARD unset)"
+# Source any *.sh files in /app/bootstrap-overlay.d/ after core setup but
+# before the final exec. Downstream consumers (e.g. paperclip operationalization)
+# drop their boot-time launch logic here without forking this script. Overlays
+# are sourced — not executed — so they inherit `set -euo pipefail`, the log()
+# function, and every variable resolved above. Backgrounded processes spawned
+# from an overlay reparent to tini on the final `exec` exactly as inline
+# launches did before.
+overlay_dir="/app/bootstrap-overlay.d"
+if [[ -d "$overlay_dir" ]]; then
+  shopt -s nullglob
+  for overlay in "$overlay_dir"/*.sh; do
+    log "sourcing overlay: $overlay"
+    # shellcheck disable=SC1090
+    source "$overlay"
+  done
+  shopt -u nullglob
 fi
 
 # ----------------------------------------------------------------------------

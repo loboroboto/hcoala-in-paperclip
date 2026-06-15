@@ -173,9 +173,12 @@ COPY companies /app/companies
 # HERMES_CMD wrapper that seeds + isolates a per-agent home before exec'ing
 # hermes (fleet epic #8, slice #11).
 COPY scripts/bootstrap.sh /app/bootstrap.sh
+# Bootstrap-overlay drop-in (#68). bootstrap.sh sources any *.sh under this dir
+# after core setup; paperclip.sh is the downstream's runner+onboarder launches.
+COPY scripts/bootstrap-overlay.d /app/bootstrap-overlay.d
 COPY scripts/seed-hermes-home.sh /app/seed-hermes-home.sh
 COPY scripts/hermes-fleet-entry.sh /app/hermes-fleet-entry.sh
-# The onboarder/reconciler (fleet #8/#14), launched via `python` from bootstrap §5c.
+# The onboarder/reconciler (fleet #8/#14), launched by the paperclip overlay.
 COPY scripts/paperclip-onboarder.py /app/paperclip-onboarder.py
 RUN chmod +x /app/bootstrap.sh /app/seed-hermes-home.sh /app/hermes-fleet-entry.sh
 
