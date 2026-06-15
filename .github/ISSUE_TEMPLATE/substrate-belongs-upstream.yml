@@ -1,0 +1,32 @@
+name: "Substrate change (belongs UPSTREAM — read first)"
+description: Substrate work that ended up here. Prefer filing it in hermes-interprets-coala.
+title: "[substrate→upstream] "
+labels: ["scope: upstream", "scope: needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **This looks like substrate work, which belongs in the upstream repo:**
+        [hermes-interprets-coala](https://github.com/loboroboto/hermes-interprets-coala/issues/new/choose).
+
+        Substrate changes (`AGENTS.md`, `SOUL.md`, `hermes.toml`, `mcp.json`, seed
+        skills, the cognitive / decision-cycle model) **cannot start downstream** —
+        they land upstream, get tagged `vYYYY.M.D`, and arrive here when we bump
+        `HCOALA_REF`. Please file it there if you can.
+
+        If it genuinely must be tracked here for now (e.g. it blocks a downstream task),
+        continue: this issue is pre-labeled `scope: upstream` + `scope: needs-triage`
+        so a maintainer can transfer it to the upstream repo.
+  - type: textarea
+    id: what
+    attributes:
+      label: What substrate change is needed?
+    validations:
+      required: true
+  - type: textarea
+    id: why-here
+    attributes:
+      label: Why is this being tracked downstream instead of upstream?
+      description: What downstream work depends on it, and what's the blocker to filing it upstream now?
+    validations:
+      required: true
