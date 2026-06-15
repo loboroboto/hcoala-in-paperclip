@@ -127,6 +127,22 @@ RUN git clone https://github.com/praveen-ks-2001/hermes-agent-template.git /opt/
     rm -rf .git && \
     uv pip install --system --no-cache -r requirements.txt
 
+# ─── BEGIN HCoALA upstream ────────────────────────────────────────────────
+# Which hermes-interprets-coala revision (the CoALA-aligned Hermes substrate)
+# to consume. Bumping HCOALA_REF and rebuilding is the upgrade mechanism:
+# a new ref means a new upstream commit's bootstrap.sh, hermes-config/,
+# AGENTS.md, and seed skills flow into /app/ on the next build.
+#
+# Tags follow the upstream's vYYYY.M.D convention. Bump: check
+# https://github.com/loboroboto/hermes-interprets-coala/releases for the
+# newest tag (or pin to `main` for bleeding edge, accepting that every
+# rebuild can pull arbitrary new upstream commits).
+ARG HCOALA_REF=v2026.6.15
+RUN git clone --depth 1 --branch ${HCOALA_REF} \
+        https://github.com/loboroboto/hermes-interprets-coala /opt/hcoala && \
+    rm -rf /opt/hcoala/.git
+# ─── END HCoALA upstream ──────────────────────────────────────────────────
+
 # ─── BEGIN Paperclip installs ─────────────────────────────────────────────
 # Downstream-specific image stages. Kept in this cache-optimal position
 # (after the admin install, before any frequent-change COPYs) so that
@@ -165,16 +181,16 @@ RUN uv pip install --system --no-cache pyyaml httpx
 # on first /chat connection.
 ENV HERMES_TUI_DIR=/opt/hermes-agent/ui-tui
 
-# Copy git-tracked architecture: AGENTS.md, SOUL.md, hermes.toml, mcp.json, skills/
+# Materialize the upstream substrate at /app/. /opt/hcoala/ is the immutable
+# provenance (read-only after the clone); /app/ is the runtime view. cp keeps
+# each layer's contents owned by exactly one source — a future downstream-only
+# patch can drop an alternate file at /app/<thing> via a later COPY without
+# touching the upstream clone.
 WORKDIR /app
-COPY hermes-config /app/hermes-config
-
-# Core scripts: idempotent home provisioner + bootstrap. Both are upstream
-# (CoALA-core) concerns; downstream extensions live in bootstrap-overlay.d/
-# below (see the Paperclip operationalization seam).
-COPY scripts/bootstrap.sh /app/bootstrap.sh
-COPY scripts/seed-hermes-home.sh /app/seed-hermes-home.sh
-RUN chmod +x /app/bootstrap.sh /app/seed-hermes-home.sh
+RUN cp -r /opt/hcoala/hermes-config /app/hermes-config && \
+    cp /opt/hcoala/scripts/bootstrap.sh /app/bootstrap.sh && \
+    cp /opt/hcoala/scripts/seed-hermes-home.sh /app/seed-hermes-home.sh && \
+    chmod +x /app/bootstrap.sh /app/seed-hermes-home.sh
 
 # ─── BEGIN Paperclip operationalization ───────────────────────────────────
 # Light COPYs only — runtime data + the bootstrap-overlay drop-in + the per-
