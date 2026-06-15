@@ -134,13 +134,16 @@ fi
 # main-home context file) so each fleet agent gates independently. No-clobber: an
 # already-onboarded agent keeps humanOnboarded:true across reseeds. agentId is the
 # fleet home's basename for /data/hermes/agents/<id>; empty for the main home (the
-# skill fills it in on first run).
-if [[ ! -f "$HOME_DIR/onboarding/state.json" ]]; then
+# skill fills it in on first run). Honor HERMES_ONBOARDING_STATE_PATH if set
+# (downstream may relocate the gate file); default keeps today's per-agent layout.
+state_file="${HERMES_ONBOARDING_STATE_PATH:-$HOME_DIR/onboarding/state.json}"
+if [[ ! -f "$state_file" ]]; then
   case "$HOME_DIR" in
     /data/hermes/agents/*) agent_id="${HOME_DIR##*/}" ;;
     *)                     agent_id="" ;;
   esac
-  cat > "$HOME_DIR/onboarding/state.json" <<EOF
+  mkdir -p "$(dirname "$state_file")"
+  cat > "$state_file" <<EOF
 {
   "humanOnboarded": false,
   "gateActive": false,
@@ -151,7 +154,7 @@ if [[ ! -f "$HOME_DIR/onboarding/state.json" ]]; then
   "channel": null
 }
 EOF
-  log "seeded $HOME_DIR/onboarding/state.json (humanOnboarded=false)"
+  log "seeded $state_file (humanOnboarded=false)"
 fi
 
 if [[ ! -f "$HOME_DIR/PEERS.md" ]]; then
