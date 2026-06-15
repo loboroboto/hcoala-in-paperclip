@@ -127,11 +127,20 @@ RUN git clone https://github.com/praveen-ks-2001/hermes-agent-template.git /opt/
     rm -rf .git && \
     uv pip install --system --no-cache -r requirements.txt
 
+# ─── BEGIN Paperclip installs ─────────────────────────────────────────────
+# Downstream-specific image stages. Kept in this cache-optimal position
+# (after the admin install, before any frequent-change COPYs) so that
+# editing fleet/agents.yaml or a script doesn't invalidate the heavy git
+# clone below.
+#
+# To carve this out: delete everything between the BEGIN/END markers.
+
 # Which paperclip-hermes-gateway revision to install. Provides the runner
 # (runner/server.py) — a tiny aiohttp server that exposes the hermes_remote
 # endpoint Paperclip calls to spawn `hermes` over Railway's private network
 # (fleet epic #8, slice #10). GET /health (unauth) + POST /run (Bearer
-# RUNNER_AUTH_TOKEN). bootstrap.sh background-launches it on boot.
+# RUNNER_AUTH_TOKEN). The bootstrap-overlay (#68) background-launches it on
+# boot from scripts/bootstrap-overlay.d/paperclip.sh.
 #
 # No release tags upstream → pinned to a SHA for reproducible rebuilds, same
 # as HERMES_ADMIN_REF. To bump, check
@@ -147,6 +156,7 @@ RUN git clone https://github.com/ecologic-automate/paperclip-hermes-gateway.git 
 # Deps for the paperclip onboarder/reconciler (fleet #8/#14): YAML registry
 # parsing + HTTP. Installed explicitly (not relied on transitively).
 RUN uv pip install --system --no-cache pyyaml httpx
+# ─── END Paperclip installs ───────────────────────────────────────────────
 
 # Points hermes at our pre-built TUI bundle. hermes's _make_tui_argv
 # checks HERMES_TUI_DIR first: if dist/entry.js exists there, it skips
@@ -159,28 +169,47 @@ ENV HERMES_TUI_DIR=/opt/hermes-agent/ui-tui
 WORKDIR /app
 COPY hermes-config /app/hermes-config
 
-# Copy the git-tracked fleet desired-state registry so the onboarder/reconciler
-# (fleet epic #8, slice #14) can read it at /app/fleet/agents.yaml at runtime.
+# Core scripts: idempotent home provisioner + bootstrap. Both are upstream
+# (CoALA-core) concerns; downstream extensions live in bootstrap-overlay.d/
+# below (see the Paperclip operationalization seam).
+COPY scripts/bootstrap.sh /app/bootstrap.sh
+COPY scripts/seed-hermes-home.sh /app/seed-hermes-home.sh
+RUN chmod +x /app/bootstrap.sh /app/seed-hermes-home.sh
+
+# ─── BEGIN Paperclip operationalization ───────────────────────────────────
+# Light COPYs only — runtime data + the bootstrap-overlay drop-in + the per-
+# agent fleet wrapper + the onboarder/reconciler script. Heavy install steps
+# for the same epic live in the upper "Paperclip installs" seam.
+#
+# To carve this out: delete everything between the BEGIN/END markers; the
+# bootstrap-overlay.d/ directory becomes empty in the image, which
+# bootstrap.sh already handles (no-op when the directory is missing or
+# empty, per the overlay-hook contract added in #68).
+
+# Fleet desired-state registry. paperclip-onboarder.py reads /app/fleet/agents.yaml
+# at runtime (hardcoded default at scripts/paperclip-onboarder.py:62).
 COPY fleet /app/fleet
 
-# Copy interchangeable Paperclip company packages: COMPANY.md, agents/<role>/AGENTS.md,
-# .paperclip.yaml. Read at build time only for #49 (S1); the company sync (S8, #56)
-# and selector wiring (S9, #57) will read from /app/companies at runtime.
+# Interchangeable Paperclip company packages: COMPANY.md, agents/<role>/AGENTS.md,
+# .paperclip.yaml. Read by the company sync (S8, #56) and selector wiring (S9, #57).
 COPY companies /app/companies
 
-# Copy bootstrap + fleet helpers and make executable. seed-hermes-home.sh is the
-# shared idempotent home-provisioner; hermes-fleet-entry.sh is the runner's
-# HERMES_CMD wrapper that seeds + isolates a per-agent home before exec'ing
-# hermes (fleet epic #8, slice #11).
-COPY scripts/bootstrap.sh /app/bootstrap.sh
-# Bootstrap-overlay drop-in (#68). bootstrap.sh sources any *.sh under this dir
-# after core setup; paperclip.sh is the downstream's runner+onboarder launches.
+# Bootstrap-overlay drop-in (#68): bootstrap.sh sources any *.sh in this dir
+# after core setup; paperclip.sh inside it carries the runner + onboarder
+# launches. An empty bootstrap-overlay.d/ is a no-op (the overlay hook
+# checks dir-exists and uses `shopt -s nullglob`).
 COPY scripts/bootstrap-overlay.d /app/bootstrap-overlay.d
-COPY scripts/seed-hermes-home.sh /app/seed-hermes-home.sh
+
+# Per-agent HERMES_CMD wrapper (fleet #8/#11) — seeds the agent's home and
+# isolates ~/.hermes before exec'ing hermes. The runner (above) launches this
+# instead of `hermes` directly for every /run.
 COPY scripts/hermes-fleet-entry.sh /app/hermes-fleet-entry.sh
-# The onboarder/reconciler (fleet #8/#14), launched by the paperclip overlay.
+
+# Onboarder/reconciler (fleet #8/#14/#15) — launched by the paperclip overlay.
 COPY scripts/paperclip-onboarder.py /app/paperclip-onboarder.py
-RUN chmod +x /app/bootstrap.sh /app/seed-hermes-home.sh /app/hermes-fleet-entry.sh
+
+RUN chmod +x /app/hermes-fleet-entry.sh
+# ─── END Paperclip operationalization ─────────────────────────────────────
 
 # The /data mount comes from the Railway volume at runtime; don't VOLUME
 # it here (Railway manages the mount itself). For local `docker run`, pass
