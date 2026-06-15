@@ -13,7 +13,7 @@ upstream pollutes the shared substrate.
 
 ## Where does this issue/PR go?
 
-Apply this test — it is identical in both repos:
+Apply this test — the same test governs the upstream substrate repo:
 
 - **Does it touch the CoALA substrate?** — `AGENTS.md`, `SOUL.md`, `hermes.toml`,
   `mcp.json`, the seed `skills/`, the decision-cycle / cognitive model, or any Hermes
