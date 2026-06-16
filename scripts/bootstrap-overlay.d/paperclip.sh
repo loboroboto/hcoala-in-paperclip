@@ -79,3 +79,19 @@ if [[ -n "${PAPERCLIP_ONBOARD:-}" ]]; then
 else
   log "paperclip onboarder disabled (PAPERCLIP_ONBOARD unset)"
 fi
+
+# ----------------------------------------------------------------------------
+# Fleet (#8/#48/#56): paperclip company sync (board-key definition plane)
+# ----------------------------------------------------------------------------
+# Imports the selected company package's active-role AGENTS.md bundle(s) into
+# Paperclip's managed instructions bundle, so the CoALA charter + onboarding gate
+# reach the CEO's injected prompt natively (mechanism: spike #42, PR #43). The script
+# self-gates: PAPERCLIP_COMPANY_TEMPLATE picks the slug (default agentsys-coala until
+# #59), and it no-ops when no board credential ($PAPERCLIP_BOARD_KEY or
+# ~/.paperclip/auth.json) is present — so the board credential is the effective on/off
+# switch. It resolves companyId from the CEO key materialized above, and authorizes the
+# import with the board key. Unlike the onboarder loop this is single-shot — the charter
+# is git-tracked and deploy-triggered, not runtime-drifting — so run it FOREGROUND and
+# let a non-zero exit be non-fatal (boot continues; the next deploy re-runs it).
+python /app/paperclip-company-sync.py --once \
+  || log "WARN: company sync exited non-zero (boot continues; retries next deploy)"
