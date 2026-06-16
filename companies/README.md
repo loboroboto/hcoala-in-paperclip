@@ -127,42 +127,57 @@ PAPERCLIP_COMPANY_TEMPLATE=<slug>
 
 Picks which `companies/<slug>/` package this deployment treats as active.
 
-- Unset → **no company active**. No silent fallback to a default slug.
+- Unset → falls back to the default slug (`agentsys-coala` for now, until S11
+  (#59) ships `default-coala`). The **board credential**
+  (`$PAPERCLIP_BOARD_KEY` or `~/.paperclip/auth.json`) is the effective on/off
+  switch — with no board key the sync no-ops.
 - Set to a slug with no matching directory → the sync (S8) errors loudly.
 - Changing the value and redeploying is how you **switch companies** (see
   runbook below).
 
-No code reads this env var yet; S8 (#56) introduces the read.
+Read by the sync as of S8 (#56); launched at boot by the overlay
+(`scripts/bootstrap-overlay.d/paperclip.sh`) as of S8/S9 (#56/#57).
 
 ---
 
-## Switch runbook (skeleton)
+## Switch runbook
 
-Inline skeleton mirroring the SKILL.md structure used in
-`hermes-config/skills/*/SKILL.md`. Bodies get filled in by S9 (#57) once the
-bootstrap wiring lands.
+Mirrors the SKILL.md structure used in `hermes-config/skills/*/SKILL.md`. The
+bootstrap wiring (S8/S9, #56/#57) is live; the first live bring-up that proves it
+end-to-end is S10 (#58).
 
 ### Prerequisites
 
 - The target package exists at `companies/<slug>/` and validates against
   `paperclip/v1`.
+- A board credential is available to the deployment: `$PAPERCLIP_BOARD_KEY`
+  (`pcp_board_*`, instance-admin, expires — spike #42) or a
+  `~/.paperclip/auth.json` the sync can scan. Without one the sync no-ops.
+- `$PAPERCLIP_CEO_KEY` is set — the sync resolves `companyId` from it.
 - Deployer has access to set `PAPERCLIP_COMPANY_TEMPLATE` in the deployment
   environment.
 
 ### Steps
 
-1. _(filled in by S9 #57)_ — set `PAPERCLIP_COMPANY_TEMPLATE=<slug>`.
-2. _(filled in by S9 #57)_ — redeploy / restart so the bootstrap re-runs the
-   company sync.
-3. _(filled in by S9 #57)_ — observe the sync logs; confirm the active-role
-   set matches the manifest.
+1. Set `PAPERCLIP_COMPANY_TEMPLATE=<slug>` in the deployment environment (Railway
+   dashboard, or `railway variables --set PAPERCLIP_COMPANY_TEMPLATE=<slug>`).
+   Leave it unset to take the default (`agentsys-coala`).
+2. Redeploy (`railway up`) or restart the service so the bootstrap overlay
+   (`scripts/bootstrap-overlay.d/paperclip.sh`) re-runs the company sync.
+3. Observe the `[company-sync]` lines in `railway logs`; confirm the active-role
+   set and the `imported N active-role bundle(s)` (or `all active roles in sync`)
+   line match the package manifest.
 
 ### Verification
 
-- _(filled in by S9 #57)_ — board-key reads of the active package show the
-  expected role bundles.
-- _(filled in by S9 #57)_ — agent-key probes of each active role land in the
-  right adapter.
+- Board-key read — for each active role, `GET
+  /api/agents/{id}/instructions-bundle/file?path=AGENTS.md` returns that role's
+  `AGENTS.md` verbatim (the same readback the sync uses for idempotency), e.g.
+  `curl -H "Authorization: Bearer $PAPERCLIP_BOARD_KEY"
+  "$PAPERCLIP_API_URL/api/agents/<id>/instructions-bundle/file?path=AGENTS.md"`.
+  Full live verification is S10 (#58).
+- Agent-key probe — a heartbeat/run for each active role lands in the right
+  adapter (cross-ref #58).
 - The deployment behaves as the new charter prescribes (CEO greets, etc.).
 
 ---
