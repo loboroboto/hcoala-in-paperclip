@@ -1,8 +1,10 @@
-"""Offline tests for scripts/paperclip-company-sync.py (#56/S8).
+"""Offline tests for scripts/paperclip-company-sync.py (#56/S8, #58 live contract).
 
 No network: a single httpx.MockTransport fake board backs every path (import, PUT
-fallback, GET readback, auth failure). The script filename is hyphenated, so it's loaded
-as a module by file path. Run: `pytest tests/`.
+fallback, GET readback, auth failure). The fake board encodes the contract the #58 live
+bring-up surfaced — /api/companies/import requires COMPANY.md, and the readback GET returns
+a JSON envelope ({"content": ...}). The script filename is hyphenated, so it's loaded as a
+module by file path. Run: `pytest tests/`.
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ class FakeBoard:
         self.mode = mode
         self.import_status = import_status
         self.store: dict[str, dict[str, str]] = {}   # {agent_id: {path: content}}
+        self.company_doc: str | None = None          # COMPANY.md last imported
         self.agents = [{"id": "ceo-1", "role": "ceo"}]
         self.role_to_id = {a["role"]: a["id"] for a in self.agents}
         self.writes = 0                               # successful import/PUT writes
@@ -66,7 +69,12 @@ class FakeBoard:
             if self.mode == "legacy":
                 return httpx.Response(404, json={"error": "import route not found"})
             files = json.loads(request.content)["source"]["files"]
+            if "COMPANY.md" not in files:            # live import contract (surfaced in #58)
+                return httpx.Response(422, json={"error": "Company package is missing COMPANY.md"})
+            self.company_doc = files["COMPANY.md"]
             for rel, content in files.items():
+                if rel == "COMPANY.md":
+                    continue
                 role = rel.split("/")[1]              # agents/<role>/AGENTS.md
                 agent_id = self.role_to_id.get(role)
                 if agent_id:
@@ -83,8 +91,10 @@ class FakeBoard:
             if method == "GET":
                 content = self.store.get(agent_id, {}).get(want)
                 if content is None:
-                    return httpx.Response(404, text="")
-                return httpx.Response(200, text=content)
+                    return httpx.Response(404, json={"error": "not found"})
+                # Live board returns a JSON envelope, not raw text (confirmed in #58).
+                return httpx.Response(200, json={"path": want, "size": len(content),
+                                                 "content": content})
         return httpx.Response(404, text=f"unhandled {method} {path}")
 
 
@@ -104,17 +114,35 @@ def _run(board: FakeBoard, dry_run: bool = False) -> int:
 
 
 # --- Acceptance #1: --dry-run builds a valid payload from companies/agentsys-coala/ -------
-def test_build_import_payload_shape():
+def test_collect_definition_files_includes_company_md():
     company_dir = COMPANIES_DIR / "agentsys-coala"
     active = mod.select_active_roles(mod.load_manifest(company_dir))
-    files = {r["agents_md"]: mod.read_role_bundle(company_dir, r) for r in active}
-    payload = mod.build_import_payload("co-1", files)
+    files = mod.collect_definition_files(company_dir, active)
+    # COMPANY.md is mandatory (live import contract, #58); plus only the active (ceo) bundle —
+    # the four defined-only roles are excluded.
+    assert set(files) == {"COMPANY.md", "agents/ceo/AGENTS.md"}
+    assert files["agents/ceo/AGENTS.md"] == _expected_ceo_content()
+    assert files["COMPANY.md"].strip()
 
+
+def test_build_import_payload_shape():
+    files = {"COMPANY.md": "c", "agents/ceo/AGENTS.md": "a"}
+    payload = mod.build_import_payload("co-1", files)
     assert payload["source"]["type"] == "inline"
+    assert payload["source"]["files"] == files
     assert payload["target"] == {"mode": "existing_company", "companyId": "co-1"}
-    # only the active (ceo) role; the four defined-only roles are excluded
-    assert list(payload["source"]["files"]) == ["agents/ceo/AGENTS.md"]
-    assert payload["source"]["files"]["agents/ceo/AGENTS.md"] == _expected_ceo_content()
+
+
+def test_import_requires_company_md():
+    # Regression for #58: the live board rejects an import without COMPANY.md; the mock
+    # encodes that contract, so a payload omitting it must 422 (and the sync always sends it).
+    board = FakeBoard(mode="import")
+    transport = httpx.MockTransport(board.handler)
+    payload = mod.build_import_payload("co-1", {"agents/ceo/AGENTS.md": "x"})
+    with mod.make_client("http://board.test", "pcp_board_test", transport) as client:
+        resp = mod.import_company(client, payload)
+    assert resp.status_code == 422
+    assert "COMPANY.md" in resp.text
 
 
 def test_dry_run_builds_payload_without_writing():
@@ -129,12 +157,14 @@ def test_import_round_trips_ceo_bundle():
     board = FakeBoard(mode="import")
     assert _run(board) == mod.EX_OK
     assert board.store["ceo-1"][mod.BUNDLE_FILENAME] == _expected_ceo_content()
+    assert board.company_doc and "AgentSys CoALA" in board.company_doc  # COMPANY.md imported
 
     transport = httpx.MockTransport(board.handler)
     with mod.make_client("http://board.test", "pcp_board_test", transport) as client:
         readback = mod.readback_role_bundle(client, "ceo-1")
     assert readback.status_code == 200
-    assert readback.text == _expected_ceo_content()
+    # readback is a JSON envelope; _bundle_content extracts the verbatim bundle text
+    assert mod._bundle_content(readback) == _expected_ceo_content()
 
 
 def test_legacy_board_falls_back_to_put():

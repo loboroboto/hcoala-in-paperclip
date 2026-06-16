@@ -24,12 +24,14 @@ Two credentials: the board key authorizes the import write; the existing CEO *ag
 What it does (single pass — the charter is deploy-triggered, not drift-triggered, so there is
 no reconcile loop; --once is accepted for parity):
   1. Parse companies/<slug>/.paperclip.yaml; select roles with status=="active"; read each
-     active role's agents_md off disk (fail-closed if an active role's file is missing/empty).
+     active role's agents_md + the package COMPANY.md off disk (fail-closed if missing/empty).
+     COMPANY.md is mandatory — the live import rejects a payload without it (proven in #58).
   2. Resolve companyId from the CEO key; resolve role→agentId from the company agent list.
   3. Per active role, GET the managed bundle and compare (idempotency) — write only on drift.
-  4. On drift, POST /api/companies/import with {source:{type:inline,files}, target:{mode:
-     existing_company, companyId}}. If the import route is unavailable on this board build
-     (404/405/501), fall back to per-role PUT /api/agents/{id}/instructions-bundle/file.
+  4. On drift, POST /api/companies/import with {source:{type:inline,files:{COMPANY.md, each
+     active agents/<role>/AGENTS.md}}, target:{mode:existing_company, companyId}}. If the import
+     route is unavailable on this build (404/405/501), fall back to per-role PUT
+     /api/agents/{id}/instructions-bundle/file.
 
 Exit codes (mirror the onboarder):
   0  — synced / already in sync / disabled (no-op) / dry-run
@@ -69,6 +71,7 @@ MANIFEST_NAME = ".paperclip.yaml"
 EXPECTED_SCHEMA = "paperclip/v1"
 VALID_STATUSES = ("active", "defined-only")
 BUNDLE_FILENAME = "AGENTS.md"  # the ?path= value the managed bundle is keyed by
+COMPANY_FILE = "COMPANY.md"    # the live /api/companies/import requires this (proven in #58)
 
 # Exit codes (see module docstring).
 EX_OK = 0
@@ -209,6 +212,29 @@ def read_role_bundle(company_dir: Path, role: dict[str, Any]) -> str:
     return content
 
 
+def read_company_doc(company_dir: Path) -> str:
+    """Read the package's COMPANY.md. Required: the live /api/companies/import rejects a
+    payload without it ([422] "Company package is missing COMPANY.md", surfaced in #58)."""
+    p = company_dir / COMPANY_FILE
+    if not p.is_file():
+        log(f"ERROR: {p} missing — /api/companies/import requires {COMPANY_FILE}")
+        sys.exit(EX_HARD)
+    content = p.read_text()
+    if not content.strip():
+        log(f"ERROR: {p} is empty")
+        sys.exit(EX_HARD)
+    return content
+
+
+def collect_definition_files(company_dir: Path, active: list[dict[str, Any]]) -> dict[str, str]:
+    """The definition-plane files the import carries: COMPANY.md + each active role's
+    AGENTS.md (keyed by repo-relative path). COMPANY.md is mandatory (see read_company_doc)."""
+    files = {COMPANY_FILE: read_company_doc(company_dir)}
+    for role in active:
+        files[role["agents_md"]] = read_role_bundle(company_dir, role)
+    return files
+
+
 def build_import_payload(company_id: str, files: dict[str, str]) -> dict[str, Any]:
     """Pure: the companies/import request body (shape from #56, confirmed in spike #42).
     Keys of `files` are repo-relative paths (e.g. agents/ceo/AGENTS.md). Called by the
@@ -338,12 +364,25 @@ def readback_role_bundle(client: httpx.Client, agent_id: str) -> httpx.Response 
         return None
 
 
+def _bundle_content(resp: httpx.Response) -> str:
+    """Extract the bundle text from a readback response. The live board returns a JSON
+    envelope {"path":…, "content":…} (confirmed in #58); tolerate a raw-text body too."""
+    body = resp.text
+    try:
+        data = resp.json()
+    except (json.JSONDecodeError, ValueError):
+        return body
+    if isinstance(data, dict) and "content" in data:
+        return data["content"]
+    return body
+
+
 def _in_sync(client: httpx.Client, agent_id: str, desired: str) -> bool:
     """True iff the managed bundle already matches desired (trailing-newline tolerant)."""
     rb = readback_role_bundle(client, agent_id)
     if rb is None or rb.status_code != 200:
         return False
-    return rb.text.rstrip("\n") == desired.rstrip("\n")
+    return _bundle_content(rb).rstrip("\n") == desired.rstrip("\n")
 
 
 # ---------------------------------------------------------------------------
@@ -400,8 +439,9 @@ def sync_once(api_url: str, companies_root: str, slug: str, dry_run: bool,
     if not active:
         log(f"company {slug}: no active roles in manifest — nothing to sync")
         return EX_OK
-    files = {role["agents_md"]: read_role_bundle(company_dir, role) for role in active}
-    log(f"company {slug}: {len(active)} active role(s) — {', '.join(r['name'] for r in active)}")
+    files = collect_definition_files(company_dir, active)
+    log(f"company {slug}: {len(active)} active role(s) — {', '.join(r['name'] for r in active)} "
+        f"(+ {COMPANY_FILE})")
 
     # Dry-run: build + show the payload without writing. Resolve companyId if possible, else
     # use a placeholder so the payload is shown even with no board reachable.
@@ -469,7 +509,7 @@ def sync_once(api_url: str, companies_root: str, slug: str, dry_run: bool,
                 f"(see #42); refresh ~/.paperclip/auth.json or $PAPERCLIP_BOARD_KEY")
             return EX_HARD
         if resp.status_code // 100 == 2:
-            log(f"company {slug}: imported {len(files)} active-role bundle(s)")
+            log(f"company {slug}: imported {COMPANY_FILE} + {len(drift)} active-role bundle(s)")
             return EX_OK
         if import_unavailable(resp):
             log(f"import route unavailable [{resp.status_code}]; falling back to per-role PUT")
