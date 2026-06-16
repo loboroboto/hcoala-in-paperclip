@@ -224,6 +224,9 @@ COPY scripts/hermes-fleet-entry.sh /app/hermes-fleet-entry.sh
 # Onboarder/reconciler (fleet #8/#14/#15) — launched by the paperclip overlay.
 COPY scripts/paperclip-onboarder.py /app/paperclip-onboarder.py
 
+# Company sync (S8/#56) — board-key definition-plane import, launched by the paperclip overlay.
+COPY scripts/paperclip-company-sync.py /app/paperclip-company-sync.py
+
 RUN chmod +x /app/hermes-fleet-entry.sh
 # ─── END Paperclip operationalization ─────────────────────────────────────
 
