@@ -81,6 +81,19 @@ else
 fi
 
 # ----------------------------------------------------------------------------
+# Fleet (#8/#48): paperclip non-CEO provisioner (board-key agent creation)
+# ----------------------------------------------------------------------------
+# Creates + wires the company's *active* non-CEO agents (the CEO is never imported — it's
+# taken over via the company-sync's per-agent PUT, #82). Resolves existing agents by name
+# (no hardcoded ids), imports the missing ones born-wired to the shared runner, and
+# reconciles role + heartbeat with the board key — idempotent, so every deploy is a safe
+# no-op once the company is stood up. Must run BEFORE the company-sync below (the sync fails
+# loud on an active role with no agent yet). Self-gates like the sync: no-ops without a board
+# credential and when no non-CEO role is `status: active`. Foreground + non-fatal.
+python /app/paperclip-company-provision.py --once \
+  || log "WARN: company provisioner exited non-zero (boot continues; retries next deploy)"
+
+# ----------------------------------------------------------------------------
 # Fleet (#8/#48/#56): paperclip company sync (board-key definition plane)
 # ----------------------------------------------------------------------------
 # Writes the selected company package's active-role AGENTS.md bundle(s) into each
