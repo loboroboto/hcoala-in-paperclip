@@ -38,13 +38,14 @@ and the Railway/`.env` deployment surface.
 │
 ├── scripts/
 │   ├── bootstrap-overlay.d/
-│   │   └── paperclip.sh                     ← boot-time launches: runner + onboarder
+│   │   └── paperclip.sh                     ← boot-time launches: runner + reconciler
 │   ├── hermes-fleet-entry.sh                ← per-agent HERMES_CMD wrapper (slices the runner spawns)
-│   ├── paperclip-onboarder.py               ← reconciler loop: fleet/agents.yaml → Paperclip
+│   ├── paperclip-reconcile.py               ← reconciler loop: provision → sync → onboard
+│   ├── paperclip_common.py                  ← shared layer (creds, CEO resolution, manifest)
 │   └── install-paperclip-adapter.sh         ← host-side helper; not in image
 │
 ├── fleet/
-│   ├── agents.yaml                          ← desired-state registry the onboarder reconciles
+│   ├── agents.yaml                          ← desired-state registry the reconciler reconciles
 │   └── README.md
 │
 └── companies/                               ← interchangeable Paperclip company packages
@@ -310,10 +311,10 @@ the change.
 
 | To change…                                  | Edit                                          |
 |---------------------------------------------|-----------------------------------------------|
-| Boot-time launches (runner, onboarder)      | `scripts/bootstrap-overlay.d/paperclip.sh`     |
+| Boot-time launches (runner, reconciler)     | `scripts/bootstrap-overlay.d/paperclip.sh`     |
 | Per-agent isolation / fleet wrapper         | `scripts/hermes-fleet-entry.sh`                |
 | Fleet desired-state                         | `fleet/agents.yaml`                            |
-| Onboarder/reconciler logic                  | `scripts/paperclip-onboarder.py`               |
+| Reconciler logic (provision/sync/onboard)   | `scripts/paperclip-reconcile.py` + `paperclip_common.py` |
 | Company packages                            | `companies/<slug>/`                            |
 | Image composition (incl. `HCOALA_REF` bump) | `docker/Dockerfile`                            |
 | Railway env-var surface                     | `railway.toml`, `.env.example`                 |

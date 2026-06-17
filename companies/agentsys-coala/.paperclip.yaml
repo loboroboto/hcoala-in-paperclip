@@ -1,3 +1,9 @@
+# Role activation is staged: a role is `active` only once it is actually operated. The
+# CEO is the live agent today; the four specialist roles are `defined-only` (charter
+# authored + git-tracked, but NOT provisioned/deployed). Bring one online by flipping its
+# status to `active` and redeploying with PAPERCLIP_BOARD_KEY set — the provisioner then
+# creates + wires it and the sync pushes its bundle. Deploying only what works keeps the
+# board honest (no idle heartbeating agents that do no dispatched work).
 schema: paperclip/v1
 slug: agentsys-coala
 roles:
@@ -5,14 +11,14 @@ roles:
     status: active
     agents_md: agents/ceo/AGENTS.md
   - name: cto
-    status: active
+    status: defined-only
     agents_md: agents/cto/AGENTS.md
   - name: staff-engineer
-    status: active
+    status: defined-only
     agents_md: agents/staff-engineer/AGENTS.md
   - name: qa-release-lead
-    status: active
+    status: defined-only
     agents_md: agents/qa-release-lead/AGENTS.md
   - name: research-perf-analyst
-    status: active
+    status: defined-only
     agents_md: agents/research-perf-analyst/AGENTS.md
