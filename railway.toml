@@ -103,15 +103,16 @@ restartPolicyMaxRetries = 10
 #                               transiently unreachable. Default 3600.
 #   PAPERCLIP_COMPANY_TEMPLATE — company package slug under companies/<slug>/ whose
 #                               active-role AGENTS.md bundle(s) the boot company-sync
-#                               (fleet #48/#56) imports into Paperclip's managed
-#                               instructions bundle. Unset → default agentsys-coala
+#                               (fleet #48/#56) writes into each active role's managed
+#                               instructions bundle (per-agent PUT, #82). Unset →
+#                               default agentsys-coala
 #                               (until #59 ships default-coala). The board credential
 #                               below is the effective on/off switch — the sync no-ops
 #                               without one.
 #   PAPERCLIP_BOARD_KEY      — board API key (pcp_board_*, instance-admin, expires;
-#                               spike #42) authorizing the company import; else the
-#                               sync scans ~/.paperclip/auth.json. companyId is resolved
-#                               from PAPERCLIP_CEO_KEY (above).
+#                               spike #42) authorizing the per-agent instructions-bundle
+#                               writes; else the sync scans ~/.paperclip/auth.json.
+#                               companyId is resolved from PAPERCLIP_CEO_KEY (above).
 #   HERMES_AUTH_JSON_BOOTSTRAP — JSON contents of a locally-generated
 #                               ~/.hermes/auth.json, written to the volume
 #                               on first boot. Use for OAuth-based providers
