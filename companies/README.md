@@ -113,9 +113,14 @@ group-operation frame in
 | **Definition**      | board-key   | `COMPANY.md` + each role's `AGENTS.md`. Charter / system prompt material. | "Architecture" half of the durability story — git-tracked, fresh from the repo on every deploy. |
 | **Adapter**         | agent-key   | Active roles wired to Hermes peers, channels, transports. The actual running surface. | "State" half — volume-backed, mutable, instantiated by the onboarder. |
 
-Board-key writes mutate the charter. Agent-key writes mutate the running
-adapters. Tools that only have an agent key cannot rewrite the charter (and
-get 403s if they try, per spike #42).
+Board-key writes mutate the charter via per-agent `PUT
+/api/agents/{id}/instructions-bundle/file` of each active role's `AGENTS.md` — the
+sync never calls `/api/companies/import`, which on an existing company creates a
+duplicate agent per role instead of swapping the bundle (#58/#82). `COMPANY.md` is a
+git-tracked source-of-truth charter; the sync validates it (a package must ship a
+non-empty one) but does **not** push it to the board — only `AGENTS.md` reaches the
+agent prompt. Agent-key writes mutate the running adapters. Tools that only have an
+agent key cannot rewrite the charter (and get 403s if they try, per spike #42).
 
 ---
 
@@ -165,8 +170,9 @@ end-to-end is S10 (#58).
 2. Redeploy (`railway up`) or restart the service so the bootstrap overlay
    (`scripts/bootstrap-overlay.d/paperclip.sh`) re-runs the company sync.
 3. Observe the `[company-sync]` lines in `railway logs`; confirm the active-role
-   set and the `imported N active-role bundle(s)` (or `all active roles in sync`)
-   line match the package manifest.
+   set and either `N role(s) drifted — writing per-role bundle(s)` (with a
+   `bundle written via PUT` line per role) or `all active roles in sync` match the
+   package manifest.
 
 ### Verification
 
@@ -189,7 +195,7 @@ end-to-end is S10 (#58).
 | Package format        | S2 (#50) — `agentsys-coala` package shell           |
 | Role `AGENTS.md`      | S3–S7 (#51–#55) — CEO, CTO, Staff Eng, QA, Research |
 | Active vs defined-only| S8 (#56) — sync reads the manifest                  |
-| Two-plane model       | S8 (#56) — board-key import; existing adapter flip reused |
+| Two-plane model       | S8 (#56) — board-key per-agent PUT (#82); existing adapter flip reused |
 | Selector              | S9 (#57) — bootstrap reads `PAPERCLIP_COMPANY_TEMPLATE` |
 | Switch runbook bodies | S9 (#57) and S10 (#58) — first live bring-up        |
 | Second-package proof  | S11–S12 (#59–#60) — `default-coala` + e2e switch    |

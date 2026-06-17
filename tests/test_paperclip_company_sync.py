@@ -1,10 +1,12 @@
-"""Offline tests for scripts/paperclip-company-sync.py (#56/S8, #58 live contract).
+"""Offline tests for scripts/paperclip-company-sync.py (#56/S8, #82 PUT-per-role contract).
 
-No network: a single httpx.MockTransport fake board backs every path (import, PUT
-fallback, GET readback, auth failure). The fake board encodes the contract the #58 live
-bring-up surfaced — /api/companies/import requires COMPANY.md, and the readback GET returns
-a JSON envelope ({"content": ...}). The script filename is hyphenated, so it's loaded as a
-module by file path. Run: `pytest tests/`.
+No network: a single httpx.MockTransport fake board backs every path (PUT, GET readback, auth
+failure). The fake board encodes the contracts the #58 live bring-up surfaced and #82 acts on:
+the instructions-bundle PUT MUST be JSON with BOTH 'path' and 'content' (raw bytes / query-only
+path → 400), the readback GET returns a JSON envelope ({"content": ...}), and the sync MUST
+NEVER POST /api/companies/import or create an agent (import duplicates agents on an existing
+company — the #58 regression). The script filename is hyphenated, so it's loaded as a module by
+file path. Run: `pytest tests/`.
 """
 
 from __future__ import annotations
@@ -38,21 +40,25 @@ def _expected_ceo_content() -> str:
 
 
 class FakeBoard:
-    """In-memory Paperclip board over httpx.MockTransport.
+    """In-memory Paperclip board over httpx.MockTransport. Encodes the #82 live contract:
 
-    mode='import'  → POST /api/companies/import stores each role's AGENTS.md.
-    mode='legacy'  → POST import returns 404 so the script falls back to per-role PUT.
-    import_status  → force a status on POST import (e.g. 401) to exercise auth handling.
+    - PUT /api/agents/{id}/instructions-bundle/file MUST be JSON with BOTH 'path' and 'content'
+      (raw bytes or query-only path → 400 — the live failure of the pre-#82 put_role_bundle).
+    - GET readback returns a JSON envelope {"path","size","content"}.
+    - /api/companies/import and any agent-creating POST are guardrails: they bump a counter and
+      404, so a test can assert the sync NEVER imports or creates an agent (the #58 regression).
+
+    put_status forces a status on PUT (e.g. 401) to exercise auth handling.
     """
 
-    def __init__(self, mode: str = "import", import_status: int | None = None):
-        self.mode = mode
-        self.import_status = import_status
+    def __init__(self, put_status: int | None = None):
+        self.put_status = put_status
         self.store: dict[str, dict[str, str]] = {}   # {agent_id: {path: content}}
-        self.company_doc: str | None = None          # COMPANY.md last imported
         self.agents = [{"id": "ceo-1", "role": "ceo"}]
         self.role_to_id = {a["role"]: a["id"] for a in self.agents}
-        self.writes = 0                               # successful import/PUT writes
+        self.writes = 0                               # successful PUT writes
+        self.import_calls = 0                         # MUST stay 0 (import never called)
+        self.created_agents = 0                       # MUST stay 0 (no agent ever created)
 
     def seed(self, agent_id: str, content: str, path: str = mod.BUNDLE_FILENAME) -> None:
         self.store.setdefault(agent_id, {})[path] = content
@@ -63,32 +69,30 @@ class FakeBoard:
             return httpx.Response(200, json={"id": "ceo-1", "role": "ceo", "companyId": "co-1"})
         if method == "GET" and path == "/api/companies/co-1/agents":
             return httpx.Response(200, json=self.agents)
+        # Guardrails: the sync must never import a company or create an agent (#58 regression).
         if method == "POST" and path == "/api/companies/import":
-            if self.import_status is not None:
-                return httpx.Response(self.import_status, json={"error": "forced"})
-            if self.mode == "legacy":
-                return httpx.Response(404, json={"error": "import route not found"})
-            files = json.loads(request.content)["source"]["files"]
-            if "COMPANY.md" not in files:            # live import contract (surfaced in #58)
-                return httpx.Response(422, json={"error": "Company package is missing COMPANY.md"})
-            self.company_doc = files["COMPANY.md"]
-            for rel, content in files.items():
-                if rel == "COMPANY.md":
-                    continue
-                role = rel.split("/")[1]              # agents/<role>/AGENTS.md
-                agent_id = self.role_to_id.get(role)
-                if agent_id:
-                    self.store.setdefault(agent_id, {})[mod.BUNDLE_FILENAME] = content
-                    self.writes += 1
-            return httpx.Response(200, json={"imported": len(files)})
+            self.import_calls += 1
+            return httpx.Response(404, json={"error": "import is not used by this sync"})
+        if method == "POST" and path in ("/api/agents", "/api/companies/co-1/agents"):
+            self.created_agents += 1
+            return httpx.Response(404, json={"error": "agent creation must not happen"})
         if path.endswith("/instructions-bundle/file"):
             agent_id = path.split("/")[3]             # /api/agents/<id>/instructions-bundle/file
-            want = request.url.params.get("path", mod.BUNDLE_FILENAME)
             if method == "PUT":
-                self.store.setdefault(agent_id, {})[want] = request.content.decode("utf-8")
+                if self.put_status is not None:
+                    return httpx.Response(self.put_status, json={"error": "forced"})
+                # Live PUT contract (#82): JSON body with BOTH path and content.
+                try:
+                    body = json.loads(request.content)
+                except (json.JSONDecodeError, ValueError):
+                    return httpx.Response(400, json={"error": "expected object"})
+                if not isinstance(body, dict) or "path" not in body or "content" not in body:
+                    return httpx.Response(400, json={"error": "path and content required"})
+                self.store.setdefault(agent_id, {})[body["path"]] = body["content"]
                 self.writes += 1
                 return httpx.Response(200, json={"ok": True})
             if method == "GET":
+                want = request.url.params.get("path", mod.BUNDLE_FILENAME)
                 content = self.store.get(agent_id, {}).get(want)
                 if content is None:
                     return httpx.Response(404, json={"error": "not found"})
@@ -113,51 +117,70 @@ def _run(board: FakeBoard, dry_run: bool = False) -> int:
     return mod.sync_once("http://board.test", str(COMPANIES_DIR), "agentsys-coala", dry_run, transport)
 
 
-# --- Acceptance #1: --dry-run builds a valid payload from companies/agentsys-coala/ -------
-def test_collect_definition_files_includes_company_md():
+# --- Definition files: active roles' AGENTS.md only; COMPANY.md validated, not pushed --------
+def test_collect_definition_files_active_only():
     company_dir = COMPANIES_DIR / "agentsys-coala"
     active = mod.select_active_roles(mod.load_manifest(company_dir))
     files = mod.collect_definition_files(company_dir, active)
-    # COMPANY.md is mandatory (live import contract, #58); plus only the active (ceo) bundle —
-    # the four defined-only roles are excluded.
-    assert set(files) == {"COMPANY.md", "agents/ceo/AGENTS.md"}
+    # Only the active (ceo) AGENTS.md — COMPANY.md is NOT in the write set (#82), and the four
+    # defined-only roles are excluded.
+    assert set(files) == {"agents/ceo/AGENTS.md"}
     assert files["agents/ceo/AGENTS.md"] == _expected_ceo_content()
-    assert files["COMPANY.md"].strip()
 
 
-def test_build_import_payload_shape():
-    files = {"COMPANY.md": "c", "agents/ceo/AGENTS.md": "a"}
-    payload = mod.build_import_payload("co-1", files)
-    assert payload["source"]["type"] == "inline"
-    assert payload["source"]["files"] == files
-    assert payload["target"] == {"mode": "existing_company", "companyId": "co-1"}
+def test_company_md_validated_present_but_not_pushed():
+    # COMPANY.md must exist + be non-empty for a valid package (the #81 invariant), but the
+    # sync never adds it to the files it PUTs (asserted above).
+    doc = mod.read_company_doc(COMPANIES_DIR / "agentsys-coala")
+    assert doc.strip()  # validation passes for the real package
 
 
-def test_import_requires_company_md():
-    # Regression for #58: the live board rejects an import without COMPANY.md; the mock
-    # encodes that contract, so a payload omitting it must 422 (and the sync always sends it).
-    board = FakeBoard(mode="import")
+def test_missing_company_md_is_hard(tmp_path):
+    # A package with no COMPANY.md fails closed (EX_HARD via SystemExit).
+    (tmp_path / "agents" / "ceo").mkdir(parents=True)
+    (tmp_path / "agents" / "ceo" / "AGENTS.md").write_text("x")
+    with pytest.raises(SystemExit) as exc:
+        mod.read_company_doc(tmp_path)
+    assert exc.value.code == mod.EX_HARD
+
+
+# --- The fixed PUT contract -----------------------------------------------------------------
+def test_put_uses_json_body_with_path_and_content():
+    # Regression for the pre-#82 bug: put_role_bundle must send JSON {path, content}. The mock
+    # 400s anything else, so a 200 + stored content proves the fixed body shape.
+    board = FakeBoard()
     transport = httpx.MockTransport(board.handler)
-    payload = mod.build_import_payload("co-1", {"agents/ceo/AGENTS.md": "x"})
     with mod.make_client("http://board.test", "pcp_board_test", transport) as client:
-        resp = mod.import_company(client, payload)
-    assert resp.status_code == 422
-    assert "COMPANY.md" in resp.text
+        resp = mod.put_role_bundle(client, "ceo-1", "hello")
+    assert resp.status_code == 200
+    assert board.store["ceo-1"][mod.BUNDLE_FILENAME] == "hello"
+    assert board.writes == 1
 
 
-def test_dry_run_builds_payload_without_writing():
-    board = FakeBoard(mode="import")
-    assert _run(board, dry_run=True) == mod.EX_OK
+def test_put_rejects_non_json_body():
+    # Lock the mock to the live contract: the OLD raw-bytes + query-path shape 400s, which is
+    # what makes the test above meaningful.
+    board = FakeBoard()
+    transport = httpx.MockTransport(board.handler)
+    with mod.make_client("http://board.test", "pcp_board_test", transport) as client:
+        resp = client.put(
+            "/api/agents/ceo-1/instructions-bundle/file",
+            params={"path": mod.BUNDLE_FILENAME},
+            headers={"Content-Type": "text/markdown; charset=utf-8"},
+            content=b"raw markdown",
+        )
+    assert resp.status_code == 400
     assert board.writes == 0
-    assert board.store == {}
 
 
-# --- Acceptance #2: import round-trips the CEO AGENTS.md; readback returns it verbatim ----
-def test_import_round_trips_ceo_bundle():
-    board = FakeBoard(mode="import")
+# --- Sync end-to-end: PUT swaps the bundle; never imports or creates agents ------------------
+def test_put_round_trips_ceo_bundle():
+    board = FakeBoard()
     assert _run(board) == mod.EX_OK
     assert board.store["ceo-1"][mod.BUNDLE_FILENAME] == _expected_ceo_content()
-    assert board.company_doc and "AgentSys CoALA" in board.company_doc  # COMPANY.md imported
+    assert board.writes == 1
+    assert board.import_calls == 0
+    assert board.created_agents == 0
 
     transport = httpx.MockTransport(board.handler)
     with mod.make_client("http://board.test", "pcp_board_test", transport) as client:
@@ -167,23 +190,36 @@ def test_import_round_trips_ceo_bundle():
     assert mod._bundle_content(readback) == _expected_ceo_content()
 
 
-def test_legacy_board_falls_back_to_put():
-    board = FakeBoard(mode="legacy")
+def test_sync_never_imports_or_creates_agents():
+    # The #58 regression guard: a fresh board (CEO bundle absent → drift) must be written via
+    # PUT only — no /api/companies/import, no agent creation, no `ceo 2` duplicate.
+    board = FakeBoard()
     assert _run(board) == mod.EX_OK
-    assert board.store["ceo-1"][mod.BUNDLE_FILENAME] == _expected_ceo_content()
+    assert board.import_calls == 0
+    assert board.created_agents == 0
+    assert len(board.agents) == 1  # still just the CEO
+
+
+def test_dry_run_logs_puts_without_writing():
+    board = FakeBoard()
+    assert _run(board, dry_run=True) == mod.EX_OK
+    assert board.writes == 0
+    assert board.store == {}
+    assert board.import_calls == 0
 
 
 def test_idempotent_no_write_when_in_sync():
-    board = FakeBoard(mode="import")
+    board = FakeBoard()
     board.seed("ceo-1", _expected_ceo_content())
     assert _run(board) == mod.EX_OK
-    assert board.writes == 0   # already in sync → no import/PUT
+    assert board.writes == 0   # already in sync → no PUT
 
 
-def test_auth_failure_is_hard_and_no_fallback():
-    board = FakeBoard(mode="import", import_status=401)
+def test_put_auth_failure_is_hard():
+    board = FakeBoard(put_status=401)
     assert _run(board) == mod.EX_HARD
-    assert board.writes == 0   # 401 must not trigger the PUT fallback
+    assert board.writes == 0        # 401 → hard, never retried
+    assert board.import_calls == 0  # and never an import attempt
 
 
 # --- Slug resolution + gating (main) -----------------------------------------------------
