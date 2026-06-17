@@ -35,7 +35,8 @@ The five phases:
 ## 3. Roles & status
 
 CEO is wired through the existing adapter plane today; the other four ride the
-charter as `defined-only` until CEO self-expansion (#21) instantiates them.
+charter as `defined-only` until they are provisioned — by template import or CEO
+self-expansion (#21) — and then activated.
 
 | Role                      | Status         | Operating frame                              |
 | ------------------------- | -------------- | -------------------------------------------- |
@@ -45,7 +46,9 @@ charter as `defined-only` until CEO self-expansion (#21) instantiates them.
 | `qa-release-lead`         | `defined-only` | `agents/qa-release-lead/AGENTS.md`           |
 | `research-perf-analyst`   | `defined-only` | `agents/research-perf-analyst/AGENTS.md`     |
 
-The per-role `AGENTS.md` bodies land in S3–S7 (#51–#55).
+All five per-role `AGENTS.md` bodies are authored (S3–S7 / #51–#55). The CEO is
+`active`; the four non-CEO roles stay `defined-only` until their board agents are
+provisioned (template import / #21) and activated.
 
 ## 4. Values & scope guardrails
 
