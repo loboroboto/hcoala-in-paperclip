@@ -227,6 +227,11 @@ COPY scripts/paperclip-onboarder.py /app/paperclip-onboarder.py
 # Company sync (S8/#56) — board-key definition-plane import, launched by the paperclip overlay.
 COPY scripts/paperclip-company-sync.py /app/paperclip-company-sync.py
 
+# Non-CEO provisioner (#48/#86) — board-key agent creation, launched by the paperclip overlay
+# before the company-sync. Without this COPY the overlay's `python /app/paperclip-company-
+# provision.py` fails with "No such file" and no non-CEO agents are created.
+COPY scripts/paperclip-company-provision.py /app/paperclip-company-provision.py
+
 RUN chmod +x /app/hermes-fleet-entry.sh
 # ─── END Paperclip operationalization ─────────────────────────────────────
 
