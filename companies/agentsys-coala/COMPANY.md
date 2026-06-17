@@ -34,22 +34,25 @@ The five phases:
 
 ## 3. Roles & status
 
-All five roles are `active`. The CEO is taken over via the board-key per-agent PUT
-(#82); the other four are created + wired automatically at deploy by the board-key
-provisioner (#48), and may also be grown by CEO self-expansion (#21).
+Activation is staged: a role is `active` only once it is actually operated. Today the CEO
+is the live agent (taken over via the board-key per-agent PUT, #82); the four specialist
+roles are `defined-only` — their charters are authored and git-tracked, but they are not
+provisioned or deployed yet. This keeps the board honest: no idle agents heartbeating with
+no dispatched work.
 
 | Role                      | Status         | Operating frame                              |
 | ------------------------- | -------------- | -------------------------------------------- |
 | `ceo`                     | `active`       | `agents/ceo/AGENTS.md`                       |
-| `cto`                     | `active`       | `agents/cto/AGENTS.md`                       |
-| `staff-engineer`          | `active`       | `agents/staff-engineer/AGENTS.md`            |
-| `qa-release-lead`         | `active`       | `agents/qa-release-lead/AGENTS.md`           |
-| `research-perf-analyst`   | `active`       | `agents/research-perf-analyst/AGENTS.md`     |
+| `cto`                     | `defined-only` | `agents/cto/AGENTS.md`                       |
+| `staff-engineer`          | `defined-only` | `agents/staff-engineer/AGENTS.md`            |
+| `qa-release-lead`         | `defined-only` | `agents/qa-release-lead/AGENTS.md`           |
+| `research-perf-analyst`   | `defined-only` | `agents/research-perf-analyst/AGENTS.md`     |
 
-All five per-role `AGENTS.md` bodies are authored (S3–S7 / #51–#55) and all five roles
-are `active`: the CEO via the #82 PUT takeover, the other four via the board-key
-provisioner that creates + wires them at deploy (#48). Setting `PAPERCLIP_BOARD_KEY` on
-the service is the effective on switch.
+All five per-role `AGENTS.md` bodies are authored (S3–S7 / #51–#55). Bringing a specialist
+online is a one-line change: flip its status to `active` and redeploy with
+`PAPERCLIP_BOARD_KEY` set — the board-key provisioner (#48) then creates + wires it and the
+company-sync (#82) pushes its bundle. Roles may also be grown later by CEO self-expansion
+(#21). The CEO never goes through the provisioner; it is the #82 PUT takeover.
 
 ## 4. Values & scope guardrails
 

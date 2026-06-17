@@ -18,6 +18,6 @@ jobs:
       - name: Install dev dependencies
         run: pip install -r requirements-dev.txt
       - name: Byte-compile scripts
-        run: python -m py_compile scripts/paperclip-company-sync.py scripts/paperclip-onboarder.py
+        run: python -m py_compile scripts/paperclip-reconcile.py scripts/paperclip_common.py
       - name: Run tests
         run: pytest tests/ -v

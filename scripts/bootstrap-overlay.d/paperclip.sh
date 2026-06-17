@@ -2,10 +2,10 @@
 # bootstrap-overlay/paperclip.sh — paperclip-specific boot launches.
 #
 # Sourced by /app/bootstrap.sh after core setup. Spawns the paperclip-hermes-
-# gateway runner (gated on RUNNER_AUTH_TOKEN) and the paperclip-onboarder
-# reconcile loop (gated on PAPERCLIP_ONBOARD). Both are backgrounded with `&`
-# and inherit bootstrap's stdio so logs appear in `railway logs`; tini -g
-# propagates shutdown signals to the whole process group.
+# gateway runner (gated on RUNNER_AUTH_TOKEN) and the paperclip-reconcile fleet
+# loop (gated on PAPERCLIP_ONBOARD). Both are backgrounded with `&` and inherit
+# bootstrap's stdio so logs appear in `railway logs`; tini -g propagates shutdown
+# signals to the whole process group.
 #
 # This file is the paperclip operationalization seam. The upstream snapshot
 # of hermes-interprets-coala ships an empty bootstrap-overlay.d/; this script
@@ -48,64 +48,41 @@ else
 fi
 
 # ----------------------------------------------------------------------------
-# Fleet (#8/#14): paperclip onboarder/reconciler
+# Fleet (#8): paperclip reconciler (provision → sync → onboard, one process)
 # ----------------------------------------------------------------------------
-# Reconciles the git-tracked fleet/agents.yaml into Paperclip: onboards the
-# pre-existing CEO agent onto the hermes_remote adapter (→ our runner above),
-# which clears Paperclip's "Process adapter missing command" heartbeat error.
-# Detection = reconcile success: the PATCH is rejected until the adapter is
-# installed (the single manual board gate, #12), then succeeds — so the same
-# call both detects and onboards.
-#
-# Auth is the CEO agent's bearer key. Mirror the HERMES_AUTH_JSON_BOOTSTRAP
-# pattern above: materialize it from PAPERCLIP_CEO_KEY once, chmod 600. $HOME
-# is /root here, so this writes /root/.pclip.key (where the onboarder looks).
+# Auth is the CEO agent's bearer key. Materialize it from PAPERCLIP_CEO_KEY once,
+# chmod 600. $HOME is /root here, so this writes /root/.pclip.key (where the
+# reconciler looks for it).
 if [[ -n "${PAPERCLIP_CEO_KEY:-}" ]] && [[ ! -f "$HOME/.pclip.key" ]]; then
   printf '%s' "$PAPERCLIP_CEO_KEY" > "$HOME/.pclip.key"
   chmod 600 "$HOME/.pclip.key"
   log "wrote $HOME/.pclip.key from PAPERCLIP_CEO_KEY"
 fi
 
-# Gated on PAPERCLIP_ONBOARD so the image boots normally when the fleet isn't
-# enabled. Runs the continuous reconcile loop (slice #15): it re-converges after a
-# Paperclip adapter reset and onboards the CEO once the board adapter (#12) appears,
-# backing off while it waits. Tunable via PAPERCLIP_ONBOARD_INTERVAL /
-# PAPERCLIP_ONBOARD_BACKOFF_MAX (--once is the test-only single-pass mode). Like the
-# runner, background it (reparents to tini on exec) and inherit stdio so its logs land
-# in `railway logs`; `tini -g` forwards SIGTERM to it for a clean shutdown.
-if [[ -n "${PAPERCLIP_ONBOARD:-}" ]]; then
-  python /app/paperclip-onboarder.py &
-  log "started paperclip onboarder loop (pid $!)"
+# One reconciler replaces the former three boot scripts (provision + sync +
+# onboarder). Each loop pass runs all three phases in order:
+#   provision — board-key: create + wire the active non-CEO agents (no-op without a
+#               board key or any active non-CEO role; the CEO is never imported, #82),
+#   sync      — board-key: PUT each active role's AGENTS.md bundle (#82),
+#   onboard   — CEO-key, gated on PAPERCLIP_ONBOARD: PATCH the CEO onto hermes_remote →
+#               the runner above (clears Paperclip's "Process adapter missing command"
+#               error once the board adapter #12 is approved).
+# Per-phase gating preserves the former three-script contract: the board key is the
+# on-switch for provision+sync, and PAPERCLIP_ONBOARD is the on-switch for onboard. So we
+# launch the reconciler when EITHER is present, and each phase self-gates inside (provision
+# and sync no-op without a board key; onboard is skipped without PAPERCLIP_ONBOARD).
+# Backgrounded (reparents to tini on exec; `tini -g` forwards SIGTERM for clean shutdown)
+# and inherits stdio so logs land in `railway logs`. The loop is idempotent + self-healing:
+# a Paperclip adapter reset or a dropped non-CEO agent re-converges on the next pass. A
+# fatal fault in one phase is isolated to that phase (logged ERROR + surfaced in the
+# breadcrumb) and the loop keeps retrying — it never takes the whole reconciler down. A
+# latest-pass breadcrumb is written to $HERMES_HOME/reconcile.status (refreshed every pass,
+# so its timestamp is a liveness signal). Tunables: PAPERCLIP_ONBOARD_INTERVAL /
+# PAPERCLIP_ONBOARD_BACKOFF_MAX.
+if [[ -n "${PAPERCLIP_ONBOARD:-}" ]] || [[ -n "${PAPERCLIP_BOARD_KEY:-}" ]] \
+   || [[ -f "$HOME/.paperclip/auth.json" ]]; then
+  python /app/paperclip-reconcile.py &
+  log "started paperclip fleet reconciler loop (pid $!) — provision → sync → onboard"
 else
-  log "paperclip onboarder disabled (PAPERCLIP_ONBOARD unset)"
+  log "paperclip fleet reconciler disabled (no PAPERCLIP_ONBOARD and no board credential)"
 fi
-
-# ----------------------------------------------------------------------------
-# Fleet (#8/#48): paperclip non-CEO provisioner (board-key agent creation)
-# ----------------------------------------------------------------------------
-# Creates + wires the company's *active* non-CEO agents (the CEO is never imported — it's
-# taken over via the company-sync's per-agent PUT, #82). Resolves existing agents by name
-# (no hardcoded ids), imports the missing ones born-wired to the shared runner, and
-# reconciles role + heartbeat with the board key — idempotent, so every deploy is a safe
-# no-op once the company is stood up. Must run BEFORE the company-sync below (the sync fails
-# loud on an active role with no agent yet). Self-gates like the sync: no-ops without a board
-# credential and when no non-CEO role is `status: active`. Foreground + non-fatal.
-python /app/paperclip-company-provision.py --once \
-  || log "WARN: company provisioner exited non-zero (boot continues; retries next deploy)"
-
-# ----------------------------------------------------------------------------
-# Fleet (#8/#48/#56): paperclip company sync (board-key definition plane)
-# ----------------------------------------------------------------------------
-# Writes the selected company package's active-role AGENTS.md bundle(s) into each
-# agent's managed instructions bundle (per-agent board-key PUT; #82), so the CoALA
-# charter + onboarding gate reach the CEO's injected prompt natively (mechanism: spike
-# #42, PR #43). The script self-gates: PAPERCLIP_COMPANY_TEMPLATE picks the slug
-# (default agentsys-coala until #59), and it no-ops when no board credential
-# ($PAPERCLIP_BOARD_KEY or ~/.paperclip/auth.json) is present — so the board credential
-# is the effective on/off switch. It resolves companyId from the CEO key materialized
-# above, and authorizes the writes with the board key. Unlike the onboarder loop this is
-# single-shot — the charter
-# is git-tracked and deploy-triggered, not runtime-drifting — so run it FOREGROUND and
-# let a non-zero exit be non-fatal (boot continues; the next deploy re-runs it).
-python /app/paperclip-company-sync.py --once \
-  || log "WARN: company sync exited non-zero (boot continues; retries next deploy)"

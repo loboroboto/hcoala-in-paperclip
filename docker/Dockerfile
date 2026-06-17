@@ -202,8 +202,8 @@ RUN cp -r /opt/hcoala/hermes-config /app/hermes-config && \
 # bootstrap.sh already handles (no-op when the directory is missing or
 # empty, per the overlay-hook contract added in #68).
 
-# Fleet desired-state registry. paperclip-onboarder.py reads /app/fleet/agents.yaml
-# at runtime (hardcoded default at scripts/paperclip-onboarder.py:62).
+# Fleet desired-state registry. paperclip-reconcile.py's onboard phase reads
+# /app/fleet/agents.yaml at runtime (FLEET_REGISTRY default in paperclip_common.py).
 COPY fleet /app/fleet
 
 # Interchangeable Paperclip company packages: COMPANY.md, agents/<role>/AGENTS.md,
@@ -221,16 +221,12 @@ COPY scripts/bootstrap-overlay.d /app/bootstrap-overlay.d
 # instead of `hermes` directly for every /run.
 COPY scripts/hermes-fleet-entry.sh /app/hermes-fleet-entry.sh
 
-# Onboarder/reconciler (fleet #8/#14/#15) — launched by the paperclip overlay.
-COPY scripts/paperclip-onboarder.py /app/paperclip-onboarder.py
-
-# Company sync (S8/#56) — board-key definition-plane import, launched by the paperclip overlay.
-COPY scripts/paperclip-company-sync.py /app/paperclip-company-sync.py
-
-# Non-CEO provisioner (#48/#86) — board-key agent creation, launched by the paperclip overlay
-# before the company-sync. Without this COPY the overlay's `python /app/paperclip-company-
-# provision.py` fails with "No such file" and no non-CEO agents are created.
-COPY scripts/paperclip-company-provision.py /app/paperclip-company-provision.py
+# Fleet reconciler (#8) + its shared layer — launched by the paperclip overlay. One
+# entrypoint runs all three phases (provision → sync → onboard), replacing the former
+# three boot scripts. It imports paperclip_common.py as a sibling, so both files must
+# land together in /app.
+COPY scripts/paperclip-reconcile.py /app/paperclip-reconcile.py
+COPY scripts/paperclip_common.py /app/paperclip_common.py
 
 RUN chmod +x /app/hermes-fleet-entry.sh
 # ─── END Paperclip operationalization ─────────────────────────────────────

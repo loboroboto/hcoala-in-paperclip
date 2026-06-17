@@ -23,7 +23,7 @@ body:
       description: Which part of the Paperclip layer does this touch?
       options:
         - paperclip-hermes-gateway runner
-        - onboarder / reconciler (paperclip-onboarder.py)
+        - reconciler: provision/sync/onboard (paperclip-reconcile.py)
         - fleet registry (fleet/agents.yaml)
         - companies/ (interchangeable company packages)
         - role ports
