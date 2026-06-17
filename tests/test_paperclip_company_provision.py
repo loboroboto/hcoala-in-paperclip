@@ -168,12 +168,12 @@ def test_select_provision_roles_active_nonceo_only():
     assert names == {"cto", "qa-release-lead"}   # active + non-CEO; ceo + defined-only excluded
 
 
-def test_real_manifest_has_no_active_nonceo_roles(tmp_path):
-    # The shipped agentsys-coala manifest is CEO-active, the rest defined-only → the provisioner
-    # is a clean no-op until a role is flipped active.
-    board = FakeBoard()
-    assert _run(board, str(REAL_COMPANY_DIR.parent), "agentsys-coala") == mod.EX_OK
-    assert board.import_calls == 0 and board.patches == 0
+def test_real_manifest_selection_is_active_nonceo():
+    # Structural check on the shipped manifest (its activation state is an operational choice
+    # that may change): the provisioner only ever selects active, non-CEO roles.
+    roles = mod.select_provision_roles(mod.load_manifest(REAL_COMPANY_DIR))
+    assert all(r["name"] != "ceo" for r in roles)
+    assert all(r.get("status") == "active" for r in roles)
 
 
 def test_paperclip_role_mapping():

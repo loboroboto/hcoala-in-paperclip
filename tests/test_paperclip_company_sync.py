@@ -5,8 +5,9 @@ failure). The fake board encodes the contracts the #58 live bring-up surfaced an
 the instructions-bundle PUT MUST be JSON with BOTH 'path' and 'content' (raw bytes / query-only
 path → 400), the readback GET returns a JSON envelope ({"content": ...}), and the sync MUST
 NEVER POST /api/companies/import or create an agent (import duplicates agents on an existing
-company — the #58 regression). The script filename is hyphenated, so it's loaded as a module by
-file path. Run: `pytest tests/`.
+company — the #58 regression). The manifest-dependent tests use **synthetic** packages (a
+single CEO-active company) so they're robust to the live manifest's activation state — which
+roles are `active` is an operational choice, not a unit-test invariant. Run: `pytest tests/`.
 """
 
 from __future__ import annotations
@@ -21,8 +22,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = REPO_ROOT / "scripts" / "paperclip-company-sync.py"
-COMPANIES_DIR = REPO_ROOT / "companies"
-CEO_BUNDLE = COMPANIES_DIR / "agentsys-coala" / "agents" / "ceo" / "AGENTS.md"
+REAL_COMPANY_DIR = REPO_ROOT / "companies" / "agentsys-coala"
 
 
 def _load_module():
@@ -35,8 +35,26 @@ def _load_module():
 mod = _load_module()
 
 
-def _expected_ceo_content() -> str:
-    return CEO_BUNDLE.read_text()
+def _make_company(tmp_path: Path, roles: list[tuple[str, str]], slug: str = "testco") -> tuple[str, str]:
+    """Write a synthetic company package (manifest + COMPANY.md + each role's AGENTS.md).
+    roles = [(name, status), ...]. Returns (companies_root, slug). Decouples the tests from the
+    live manifest's activation state."""
+    cdir = tmp_path / slug
+    (cdir / "agents").mkdir(parents=True)
+    lines = ["schema: paperclip/v1", f"slug: {slug}", "roles:"]
+    for name, status in roles:
+        lines += [f"  - name: {name}", f"    status: {status}",
+                  f"    agents_md: agents/{name}/AGENTS.md"]
+        rdir = cdir / "agents" / name
+        rdir.mkdir(parents=True, exist_ok=True)
+        (rdir / "AGENTS.md").write_text(f"# {name} charter\nOperating frame for {name}.\n")
+    (cdir / ".paperclip.yaml").write_text("\n".join(lines) + "\n")
+    (cdir / "COMPANY.md").write_text("---\nschema: agentcompanies/v1\nslug: testco\nname: Test Co\n---\n# Test Co\n")
+    return str(tmp_path), slug
+
+
+def _bundle(root: str, slug: str, role: str) -> str:
+    return (Path(root) / slug / "agents" / role / "AGENTS.md").read_text()
 
 
 class FakeBoard:
@@ -112,27 +130,26 @@ def _creds(monkeypatch, tmp_path):
     monkeypatch.setenv("PAPERCLIP_BOARD_KEY", "pcp_board_test")
 
 
-def _run(board: FakeBoard, dry_run: bool = False) -> int:
+def _run(board: FakeBoard, root: str, slug: str, dry_run: bool = False) -> int:
     transport = httpx.MockTransport(board.handler)
-    return mod.sync_once("http://board.test", str(COMPANIES_DIR), "agentsys-coala", dry_run, transport)
+    return mod.sync_once("http://board.test", root, slug, dry_run, transport)
 
 
 # --- Definition files: active roles' AGENTS.md only; COMPANY.md validated, not pushed --------
-def test_collect_definition_files_active_only():
-    company_dir = COMPANIES_DIR / "agentsys-coala"
-    active = mod.select_active_roles(mod.load_manifest(company_dir))
-    files = mod.collect_definition_files(company_dir, active)
-    # Only the active (ceo) AGENTS.md — COMPANY.md is NOT in the write set (#82), and the four
-    # defined-only roles are excluded.
+def test_collect_definition_files_active_only(tmp_path):
+    root, slug = _make_company(tmp_path, [("ceo", "active"), ("cto", "defined-only")])
+    cdir = Path(root) / slug
+    active = mod.select_active_roles(mod.load_manifest(cdir))
+    files = mod.collect_definition_files(cdir, active)
+    # Active only — the defined-only cto is excluded; COMPANY.md is NOT in the write set (#82).
     assert set(files) == {"agents/ceo/AGENTS.md"}
-    assert files["agents/ceo/AGENTS.md"] == _expected_ceo_content()
+    assert files["agents/ceo/AGENTS.md"] == _bundle(root, slug, "ceo")
 
 
 def test_company_md_validated_present_but_not_pushed():
-    # COMPANY.md must exist + be non-empty for a valid package (the #81 invariant), but the
-    # sync never adds it to the files it PUTs (asserted above).
-    doc = mod.read_company_doc(COMPANIES_DIR / "agentsys-coala")
-    assert doc.strip()  # validation passes for the real package
+    # COMPANY.md must exist + be non-empty for a valid package (the #81 invariant); validation
+    # passes for the real shipped package.
+    assert mod.read_company_doc(REAL_COMPANY_DIR).strip()
 
 
 def test_missing_company_md_is_hard(tmp_path):
@@ -174,10 +191,11 @@ def test_put_rejects_non_json_body():
 
 
 # --- Sync end-to-end: PUT swaps the bundle; never imports or creates agents ------------------
-def test_put_round_trips_ceo_bundle():
+def test_put_round_trips_ceo_bundle(tmp_path):
+    root, slug = _make_company(tmp_path, [("ceo", "active")])
     board = FakeBoard()
-    assert _run(board) == mod.EX_OK
-    assert board.store["ceo-1"][mod.BUNDLE_FILENAME] == _expected_ceo_content()
+    assert _run(board, root, slug) == mod.EX_OK
+    assert board.store["ceo-1"][mod.BUNDLE_FILENAME] == _bundle(root, slug, "ceo")
     assert board.writes == 1
     assert board.import_calls == 0
     assert board.created_agents == 0
@@ -187,37 +205,41 @@ def test_put_round_trips_ceo_bundle():
         readback = mod.readback_role_bundle(client, "ceo-1")
     assert readback.status_code == 200
     # readback is a JSON envelope; _bundle_content extracts the verbatim bundle text
-    assert mod._bundle_content(readback) == _expected_ceo_content()
+    assert mod._bundle_content(readback) == _bundle(root, slug, "ceo")
 
 
-def test_sync_never_imports_or_creates_agents():
+def test_sync_never_imports_or_creates_agents(tmp_path):
     # The #58 regression guard: a fresh board (CEO bundle absent → drift) must be written via
     # PUT only — no /api/companies/import, no agent creation, no `ceo 2` duplicate.
+    root, slug = _make_company(tmp_path, [("ceo", "active")])
     board = FakeBoard()
-    assert _run(board) == mod.EX_OK
+    assert _run(board, root, slug) == mod.EX_OK
     assert board.import_calls == 0
     assert board.created_agents == 0
     assert len(board.agents) == 1  # still just the CEO
 
 
-def test_dry_run_logs_puts_without_writing():
+def test_dry_run_logs_puts_without_writing(tmp_path):
+    root, slug = _make_company(tmp_path, [("ceo", "active")])
     board = FakeBoard()
-    assert _run(board, dry_run=True) == mod.EX_OK
+    assert _run(board, root, slug, dry_run=True) == mod.EX_OK
     assert board.writes == 0
     assert board.store == {}
     assert board.import_calls == 0
 
 
-def test_idempotent_no_write_when_in_sync():
+def test_idempotent_no_write_when_in_sync(tmp_path):
+    root, slug = _make_company(tmp_path, [("ceo", "active")])
     board = FakeBoard()
-    board.seed("ceo-1", _expected_ceo_content())
-    assert _run(board) == mod.EX_OK
+    board.seed("ceo-1", _bundle(root, slug, "ceo"))
+    assert _run(board, root, slug) == mod.EX_OK
     assert board.writes == 0   # already in sync → no PUT
 
 
-def test_put_auth_failure_is_hard():
+def test_put_auth_failure_is_hard(tmp_path):
+    root, slug = _make_company(tmp_path, [("ceo", "active")])
     board = FakeBoard(put_status=401)
-    assert _run(board) == mod.EX_HARD
+    assert _run(board, root, slug) == mod.EX_HARD
     assert board.writes == 0        # 401 → hard, never retried
     assert board.import_calls == 0  # and never an import attempt
 

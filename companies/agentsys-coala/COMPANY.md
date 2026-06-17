@@ -34,21 +34,22 @@ The five phases:
 
 ## 3. Roles & status
 
-CEO is wired through the existing adapter plane today; the other four ride the
-charter as `defined-only` until they are provisioned — by template import or CEO
-self-expansion (#21) — and then activated.
+All five roles are `active`. The CEO is taken over via the board-key per-agent PUT
+(#82); the other four are created + wired automatically at deploy by the board-key
+provisioner (#48), and may also be grown by CEO self-expansion (#21).
 
 | Role                      | Status         | Operating frame                              |
 | ------------------------- | -------------- | -------------------------------------------- |
 | `ceo`                     | `active`       | `agents/ceo/AGENTS.md`                       |
-| `cto`                     | `defined-only` | `agents/cto/AGENTS.md`                       |
-| `staff-engineer`          | `defined-only` | `agents/staff-engineer/AGENTS.md`            |
-| `qa-release-lead`         | `defined-only` | `agents/qa-release-lead/AGENTS.md`           |
-| `research-perf-analyst`   | `defined-only` | `agents/research-perf-analyst/AGENTS.md`     |
+| `cto`                     | `active`       | `agents/cto/AGENTS.md`                       |
+| `staff-engineer`          | `active`       | `agents/staff-engineer/AGENTS.md`            |
+| `qa-release-lead`         | `active`       | `agents/qa-release-lead/AGENTS.md`           |
+| `research-perf-analyst`   | `active`       | `agents/research-perf-analyst/AGENTS.md`     |
 
-All five per-role `AGENTS.md` bodies are authored (S3–S7 / #51–#55). The CEO is
-`active`; the four non-CEO roles stay `defined-only` until their board agents are
-provisioned (template import / #21) and activated.
+All five per-role `AGENTS.md` bodies are authored (S3–S7 / #51–#55) and all five roles
+are `active`: the CEO via the #82 PUT takeover, the other four via the board-key
+provisioner that creates + wires them at deploy (#48). Setting `PAPERCLIP_BOARD_KEY` on
+the service is the effective on switch.
 
 ## 4. Values & scope guardrails
 

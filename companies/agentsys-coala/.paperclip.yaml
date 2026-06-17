@@ -5,14 +5,14 @@ roles:
     status: active
     agents_md: agents/ceo/AGENTS.md
   - name: cto
-    status: defined-only
+    status: active
     agents_md: agents/cto/AGENTS.md
   - name: staff-engineer
-    status: defined-only
+    status: active
     agents_md: agents/staff-engineer/AGENTS.md
   - name: qa-release-lead
-    status: defined-only
+    status: active
     agents_md: agents/qa-release-lead/AGENTS.md
   - name: research-perf-analyst
-    status: defined-only
+    status: active
     agents_md: agents/research-perf-analyst/AGENTS.md
