@@ -27,9 +27,12 @@ Mechanism (single pass; --once accepted for parity):
      onboarder (adapter wire) + flips the role's manifest status to active (the #82 sync bundles
      it). Activation order matters: provision → wire → activate.
 
-SEAMS (confirmed by the Phase 0 live spike before any live use): the exact import request fields
-(`adapterOverrides`), the created-id response shape, the valid Paperclip role-enum values, and
-whether `adapterOverrides` sets role or a post-import PATCH is required. Each is marked `# SEAM`.
+Import contract — CONFIRMED live 2026-06-17 (Phase 0 spike): `adapterOverrides` (keyed by role
+slug) sets adapterType + adapterConfig on the created agent but NOT its role — import defaults
+role to "agent" (paperclipai/paperclip #1994), so the post-import role PATCH is required. The
+import result is `{company, agents:[{slug,id,action}]}`; the valid role enum includes
+ceo/cto/cmo/cfo/security/engineer/designer/qa/researcher/general (PAPERCLIP_ROLE_MAP targets are
+all valid; our raw slugs are rejected). new_company import + agent/company DELETE return 200.
 
 Exit codes (mirror the sync/onboarder):
   0  — provisioned / nothing to do / disabled (no-op) / dry-run
@@ -73,10 +76,11 @@ CEO_ROLE = "ceo"  # never imported — the invariant this whole script is built 
 DEFAULT_RUNNER_URL = "http://hermes-interprets-coala.railway.internal:8788/run"
 DEFAULT_PAPERCLIP_INTERNAL = "http://paperclip.railway.internal:3100"
 
-# SEAM (#1994 / Phase 0 spike): our role slugs → Paperclip's role enum. Import sets a created
-# agent's role to "agent" by default; we PATCH it to the right enum value afterward. The exact
-# valid enum values (and whether a slug like "staff-engineer" is accepted verbatim) are confirmed
-# by the spike — update this map to match.
+# Our role slugs → Paperclip's role enum (CONFIRMED live 2026-06-17). Import defaults a created
+# agent's role to "agent" (#1994); we PATCH it afterward. The board enum is
+# ceo/cto/cmo/cfo/security/engineer/designer/qa/researcher/general — our raw slugs
+# (staff-engineer, qa-release-lead, research-perf-analyst) are rejected (invalid_enum_value), so
+# these mappings are required.
 PAPERCLIP_ROLE_MAP = {
     "cto": "cto",
     "staff-engineer": "engineer",
@@ -325,10 +329,10 @@ def build_adapter_config() -> dict[str, Any]:
 
 def build_import_payload(company_id: str, files: dict[str, str],
                          roles: list[dict[str, Any]], adapter_config: dict[str, Any]) -> dict[str, Any]:
-    """The /api/companies/import request body. SEAM: `adapterOverrides` (keyed by role slug, with
-    adapterType + role + adapterConfig) is our best-understood shape from the upstream
-    company-portability types — the Phase 0 spike confirms the exact field names + whether role
-    is honored here or needs the post-import PATCH."""
+    """The /api/companies/import request body. CONFIRMED live (2026-06-17): `adapterOverrides`
+    keyed by role slug sets adapterType + adapterConfig on the created agent; the `role` field
+    here is IGNORED by import (role defaults to "agent", #1994) — kept for forward-compat when
+    #1990 lands; today the role is set by the post-import PATCH."""
     return {
         "source": {"type": "inline", "files": dict(files)},
         "target": {"mode": "existing_company", "companyId": company_id},
@@ -348,9 +352,9 @@ def import_company(client: httpx.Client, payload: dict[str, Any]) -> httpx.Respo
 
 
 def parse_created_agents(resp: httpx.Response) -> dict[str, str]:
-    """Extract {slug: agentId} for the agents the import created. SEAM: the response shape
-    (`{"agents":[{"slug","id","action"}]}`) is the upstream CompanyPortabilityImportResult — the
-    spike confirms it against the deployed build. Returns {} if unparseable."""
+    """Extract {slug: agentId} for the agents the import created. Response shape CONFIRMED live
+    (2026-06-17): `{"company":{...}, "agents":[{"slug","id","action"}], ...}`. Returns {} if
+    unparseable."""
     try:
         data = resp.json()
     except (json.JSONDecodeError, ValueError):
@@ -366,8 +370,9 @@ def parse_created_agents(resp: httpx.Response) -> dict[str, str]:
 
 
 def patch_agent_role(client: httpx.Client, agent_id: str, role: str) -> httpx.Response:
-    """Set a created agent's role. SEAM: import drops the role default ("agent") — #1994 — so we
-    fix it here; the onboarder handles the adapter. Drop this once import honors the override."""
+    """Set a created agent's role. CONFIRMED live (2026-06-17): import leaves role="agent"
+    (#1994); PATCH /api/agents/{id} {role} with the board key sets it (the onboarder handles the
+    adapter). Drop once import honors the override (#1990)."""
     return client.patch(f"/api/agents/{agent_id}", json={"role": role})
 
 
