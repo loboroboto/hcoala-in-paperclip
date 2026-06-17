@@ -12,24 +12,32 @@ Hard invariant: **the CEO is never imported.** An agent holding a board/CEO key 
 CEO via per-agent PUT (#82); imports carry only non-CEO roles, so the existing-company duplicate
 bug that #58 hit (import duplicates an *existing* role's agent) is structurally impossible here.
 
-Mechanism (single pass; --once accepted for parity):
-  1. Parse companies/<slug>/.paperclip.yaml; select the **non-CEO** roles; read each one's
-     agents_md + the package COMPANY.md off disk (fail-closed if missing/empty). COMPANY.md is
-     required by /api/companies/import (proven in #58/#81).
-  2. Resolve companyId + the existing role→agentId map via the CEO key. Skip any non-CEO role
-     that already has a board agent (idempotent — never re-import an existing agent).
-  3. For the roles that need creating, POST /api/companies/import with target
-     {mode:existing_company, companyId}, files = {COMPANY.md, each non-CEO agents/<role>/AGENTS.md}
-     (the CEO file is never included), and adapterOverrides that wire each new agent to the shared
-     hermes runner. Capture the created agentIds, then PATCH each agent's role (import drops
-     operational defaults incl. role → defaults to "agent"; see paperclipai/paperclip #1994).
-  4. Emit the new {role: agentId} block for fleet/agents.yaml. The operator then runs the
-     onboarder (adapter wire) + flips the role's manifest status to active (the #82 sync bundles
-     it). Activation order matters: provision → wire → activate.
+Mechanism (single pass; run at boot before the company-sync, idempotent — see
+bootstrap-overlay.d/paperclip.sh):
+  1. Parse companies/<slug>/.paperclip.yaml; select the **active non-CEO** roles (`status:
+     active` is the switch; defined-only roles are skipped). Read each one's agents_md + the
+     package COMPANY.md (fail-closed if missing/empty). COMPANY.md is required by import (#58/#81).
+  2. Resolve companyId + the existing agents via the CEO key, keyed by **name** (= the package
+     slug = the manifest role name; stable across the role PATCH, unlike the board role).
+  3. Create the missing ones: POST /api/companies/import with target {existing_company, companyId},
+     files = {COMPANY.md, each missing non-CEO agents/<role>/AGENTS.md} (the CEO file is NEVER
+     included), and adapterOverrides wiring each new agent to the shared hermes runner.
+  4. Reconcile every active non-CEO agent (created or pre-existing) with the board key: ensure
+     adapterType=hermes_remote + adapterConfig, the correct role (import defaults it to "agent",
+     #1994), and heartbeat enabled — one PATCH per agent on drift, a no-op when in sync. This is
+     self-healing (a partial prior run with role still "agent" is corrected) and gives
+     deploy-time drift recovery. Continuous recovery is a documented follow-up (onboarder).
 
-SEAMS (confirmed by the Phase 0 live spike before any live use): the exact import request fields
-(`adapterOverrides`), the created-id response shape, the valid Paperclip role-enum values, and
-whether `adapterOverrides` sets role or a post-import PATCH is required. Each is marked `# SEAM`.
+Then the company-sync (#82) bundles each active role's AGENTS.md, and the onboarder converges the
+CEO. Bringing a role up = flip it to `status: active` in the manifest + set the board key; the
+next deploy creates → wires → bundles it. The CEO is never touched here.
+
+Import contract — CONFIRMED live 2026-06-17 (Phase 0 spike): `adapterOverrides` (keyed by role
+slug) sets adapterType + adapterConfig on the created agent but NOT its role — import defaults
+role to "agent" (paperclipai/paperclip #1994), so the post-import role PATCH is required. The
+import result is `{company, agents:[{slug,id,action}]}`; the valid role enum includes
+ceo/cto/cmo/cfo/security/engineer/designer/qa/researcher/general (PAPERCLIP_ROLE_MAP targets are
+all valid; our raw slugs are rejected). new_company import + agent/company DELETE return 200.
 
 Exit codes (mirror the sync/onboarder):
   0  — provisioned / nothing to do / disabled (no-op) / dry-run
@@ -72,11 +80,13 @@ CEO_ROLE = "ceo"  # never imported — the invariant this whole script is built 
 # build_desired adapterConfig; the onboarder re-converges it on every deploy regardless).
 DEFAULT_RUNNER_URL = "http://hermes-interprets-coala.railway.internal:8788/run"
 DEFAULT_PAPERCLIP_INTERNAL = "http://paperclip.railway.internal:3100"
+DEFAULT_HEARTBEAT_INTERVAL = 300  # runtimeConfig.heartbeat.intervalSec for provisioned agents
 
-# SEAM (#1994 / Phase 0 spike): our role slugs → Paperclip's role enum. Import sets a created
-# agent's role to "agent" by default; we PATCH it to the right enum value afterward. The exact
-# valid enum values (and whether a slug like "staff-engineer" is accepted verbatim) are confirmed
-# by the spike — update this map to match.
+# Our role slugs → Paperclip's role enum (CONFIRMED live 2026-06-17). Import defaults a created
+# agent's role to "agent" (#1994); we PATCH it afterward. The board enum is
+# ceo/cto/cmo/cfo/security/engineer/designer/qa/researcher/general — our raw slugs
+# (staff-engineer, qa-release-lead, research-perf-analyst) are rejected (invalid_enum_value), so
+# these mappings are required.
 PAPERCLIP_ROLE_MAP = {
     "cto": "cto",
     "staff-engineer": "engineer",
@@ -188,9 +198,11 @@ def load_manifest(company_dir: Path) -> dict[str, Any]:
 
 
 def select_provision_roles(manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    """The roles this script may create: every role EXCEPT the CEO. The CEO is never imported
-    (it is taken over via per-agent PUT, #82) — excluding it makes a duplicate CEO impossible."""
-    return [r for r in manifest.get("roles", []) if r.get("name") != CEO_ROLE]
+    """The active non-CEO roles this script stands up. `status: active` is the switch (defined-only
+    roles are skipped); the CEO is never imported (it's taken over via per-agent PUT, #82), so a
+    duplicate CEO is impossible. Flipping a role to active is what makes the deploy provision it."""
+    return [r for r in manifest.get("roles", [])
+            if r.get("name") != CEO_ROLE and r.get("status") == "active"]
 
 
 def read_role_bundle(company_dir: Path, role: dict[str, Any]) -> str:
@@ -284,8 +296,10 @@ def resolve_ceo(client: httpx.Client) -> tuple[dict[str, Any] | None, str]:
     return {"id": ceo_id, "companyId": company_id}, f"resolve-ceo: CEO {ceo_id} (company {company_id})"
 
 
-def resolve_agent_ids(client: httpx.Client, company_id: str) -> dict[str, str]:
-    """Map role→agentId from the company agent list (for idempotency: skip roles that exist)."""
+def resolve_agent_ids_by_name(client: httpx.Client, company_id: str) -> dict[str, str]:
+    """Map agent **name**→agentId from the company agent list. Idempotency keys by name (= the
+    import slug = the manifest role name), which is STABLE across the role PATCH — unlike the board
+    role, which we mutate from "agent" to the enum (#1994). Returns {} on any failure."""
     try:
         r = client.get(f"/api/companies/{company_id}/agents")
     except httpx.HTTPError:
@@ -294,9 +308,9 @@ def resolve_agent_ids(client: httpx.Client, company_id: str) -> dict[str, str]:
         return {}
     out: dict[str, str] = {}
     for a in r.json() or []:
-        role, aid = a.get("role"), a.get("id")
-        if role and aid:
-            out[role] = aid
+        name, aid = a.get("name"), a.get("id")
+        if name and aid:
+            out[name] = aid
     return out
 
 
@@ -325,10 +339,10 @@ def build_adapter_config() -> dict[str, Any]:
 
 def build_import_payload(company_id: str, files: dict[str, str],
                          roles: list[dict[str, Any]], adapter_config: dict[str, Any]) -> dict[str, Any]:
-    """The /api/companies/import request body. SEAM: `adapterOverrides` (keyed by role slug, with
-    adapterType + role + adapterConfig) is our best-understood shape from the upstream
-    company-portability types — the Phase 0 spike confirms the exact field names + whether role
-    is honored here or needs the post-import PATCH."""
+    """The /api/companies/import request body. CONFIRMED live (2026-06-17): `adapterOverrides`
+    keyed by role slug sets adapterType + adapterConfig on the created agent; the `role` field
+    here is IGNORED by import (role defaults to "agent", #1994) — kept for forward-compat when
+    #1990 lands; today the role is set by the post-import PATCH."""
     return {
         "source": {"type": "inline", "files": dict(files)},
         "target": {"mode": "existing_company", "companyId": company_id},
@@ -348,9 +362,9 @@ def import_company(client: httpx.Client, payload: dict[str, Any]) -> httpx.Respo
 
 
 def parse_created_agents(resp: httpx.Response) -> dict[str, str]:
-    """Extract {slug: agentId} for the agents the import created. SEAM: the response shape
-    (`{"agents":[{"slug","id","action"}]}`) is the upstream CompanyPortabilityImportResult — the
-    spike confirms it against the deployed build. Returns {} if unparseable."""
+    """Extract {slug: agentId} for the agents the import created. Response shape CONFIRMED live
+    (2026-06-17): `{"company":{...}, "agents":[{"slug","id","action"}], ...}`. Returns {} if
+    unparseable."""
     try:
         data = resp.json()
     except (json.JSONDecodeError, ValueError):
@@ -365,10 +379,77 @@ def parse_created_agents(resp: httpx.Response) -> dict[str, str]:
     return out
 
 
-def patch_agent_role(client: httpx.Client, agent_id: str, role: str) -> httpx.Response:
-    """Set a created agent's role. SEAM: import drops the role default ("agent") — #1994 — so we
-    fix it here; the onboarder handles the adapter. Drop this once import honors the override."""
-    return client.patch(f"/api/agents/{agent_id}", json={"role": role})
+def desired_heartbeat() -> dict[str, Any]:
+    """Provisioned non-CEO agents heartbeat on a timer (the locked decision); a wake with no
+    dispatched work is a no-op per each role's charter. Interval mirrors the fleet default."""
+    interval = os.environ.get("PAPERCLIP_HEARTBEAT_INTERVAL", "").strip()
+    return {"enabled": True,
+            "intervalSec": int(interval) if interval.isdigit() else DEFAULT_HEARTBEAT_INTERVAL}
+
+
+def agent_needs_update(current: dict[str, Any], adapter_config: dict[str, Any],
+                       desired_role: str, heartbeat: dict[str, Any]) -> bool:
+    """True if a managed field drifts (mirrors the onboarder's needs_update, plus role)."""
+    if current.get("adapterType") != "hermes_remote":
+        return True
+    cur_cfg = current.get("adapterConfig") or {}
+    for k, v in adapter_config.items():
+        if cur_cfg.get(k) != v:
+            return True
+    if current.get("role") != desired_role:
+        return True
+    cur_hb = (current.get("runtimeConfig") or {}).get("heartbeat") or {}
+    for k, v in heartbeat.items():
+        if cur_hb.get(k) != v:
+            return True
+    return False
+
+
+def reconcile_agent(client: httpx.Client, agent_id: str, adapter_config: dict[str, Any],
+                    desired_role: str, heartbeat: dict[str, Any]) -> str:
+    """Ensure one agent is hermes_remote + correct adapterConfig + role + heartbeat, with the
+    BOARD key (confirmed to mutate any agent; the CEO key's cross-agent authz is unverified — that
+    is the onboarder follow-up). PATCH only on drift (no replaceAdapterConfig → merge mode
+    preserves the server's managed-bundle keys). Returns 'ok' | 'temp' | 'error'."""
+    try:
+        get = client.get(f"/api/agents/{agent_id}")
+    except httpx.HTTPError as exc:
+        log(f"agent {agent_id}: GET failed ({exc})")
+        return "temp"
+    if is_auth_failure(get):
+        log(f"agent {agent_id}: GET board auth failed [{get.status_code}] (#42)")
+        return "error"
+    if get.status_code != 200:
+        log(f"agent {agent_id}: GET returned {get.status_code} {get.text[:160]}")
+        return "error"
+    current = get.json()
+    if not agent_needs_update(current, adapter_config, desired_role, heartbeat):
+        log(f"agent {agent_id}: in sync (role={desired_role}, hermes_remote, heartbeat)")
+        return "ok"
+    runtime = dict(current.get("runtimeConfig") or {})
+    runtime["heartbeat"] = {**(runtime.get("heartbeat") or {}), **heartbeat}
+    payload = {
+        "adapterType": "hermes_remote",
+        "adapterConfig": adapter_config,   # merge mode — preserves managed-bundle keys
+        "role": desired_role,
+        "runtimeConfig": runtime,
+    }
+    try:
+        patch = client.patch(f"/api/agents/{agent_id}", json=payload)
+    except httpx.HTTPError as exc:
+        log(f"agent {agent_id}: PATCH failed ({exc})")
+        return "temp"
+    if is_auth_failure(patch):
+        log(f"agent {agent_id}: PATCH board auth failed [{patch.status_code}] (#42)")
+        return "error"
+    if patch.status_code // 100 == 2:
+        log(f"agent {agent_id}: reconciled → role={desired_role}, hermes_remote, heartbeat enabled")
+        return "ok"
+    if patch.status_code // 100 == 5:
+        log(f"agent {agent_id}: PATCH server error [{patch.status_code}] {patch.text[:160]}")
+        return "temp"
+    log(f"agent {agent_id}: PATCH unexpected [{patch.status_code}] {patch.text[:160]}")
+    return "error"
 
 
 # ---------------------------------------------------------------------------
@@ -384,24 +465,18 @@ def provision_once(api_url: str, companies_root: str, slug: str, dry_run: bool,
     manifest = load_manifest(company_dir)
     roles = select_provision_roles(manifest)
     if not roles:
-        log(f"company {slug}: no non-CEO roles in manifest — nothing to provision")
+        log(f"company {slug}: no active non-CEO roles — nothing to provision")
         return EX_OK
-    read_company_doc(company_dir)  # required by import (#58/#81)
-    bundles = {role["name"]: read_role_bundle(company_dir, role) for role in roles}
-    log(f"company {slug}: {len(roles)} non-CEO role(s) — {', '.join(r['name'] for r in roles)}")
-
-    def to_provision(existing: dict[str, str]) -> list[dict[str, Any]]:
-        out = []
-        for role in roles:
-            if role["name"] in existing:
-                log(f"role {role['name']}: agent already exists ({existing[role['name']]}) — skip")
-            else:
-                out.append(role)
-        return out
+    read_company_doc(company_dir)                 # required by import (#58/#81)
+    for role in roles:                            # fail-closed if an active role has no charter
+        read_role_bundle(company_dir, role)
+    log(f"company {slug}: {len(roles)} active non-CEO role(s) — "
+        f"{', '.join(r['name'] for r in roles)}")
 
     adapter_config = build_adapter_config()
+    heartbeat = desired_heartbeat()
 
-    # Dry-run: resolve ids best-effort, log the import it would send + the role PATCHes. No writes.
+    # Dry-run: resolve best-effort, log what would be created + reconciled. No writes.
     if dry_run:
         company_id = "<resolved-from-CEO-key-at-runtime>"
         existing: dict[str, str] = {}
@@ -413,26 +488,23 @@ def provision_once(api_url: str, companies_root: str, slug: str, dry_run: bool,
                     log(msg)
                     if resolved and resolved.get("companyId"):
                         company_id = resolved["companyId"]
-                        existing = resolve_agent_ids(client, company_id)
+                        existing = resolve_agent_ids_by_name(client, company_id)
             except httpx.HTTPError as exc:
                 log(f"dry-run: ids not resolved ({exc}); using placeholders")
         else:
             log("dry-run: no CEO key; using placeholders")
-        pending = to_provision(existing)
-        if not pending:
-            log("DRY-RUN — all non-CEO roles already provisioned; nothing to import")
-            return EX_OK
-        files = {COMPANY_FILE: read_company_doc(company_dir)}
-        files.update({r["agents_md"]: bundles[r["name"]] for r in pending})
-        payload = build_import_payload(company_id, files, pending, adapter_config)
-        log(f"DRY-RUN — would POST /api/companies/import (company {company_id}):")
-        log(f"  files: {sorted(payload['source']['files'])}  (CEO excluded)")
-        for r in pending:
-            log(f"  create role {r['name']} → adapterType=hermes_remote role={paperclip_role(r['name'])}; "
-                f"then PATCH role={paperclip_role(r['name'])}")
+        absent = [r for r in roles if r["name"] not in existing]
+        log(f"DRY-RUN (company {company_id}):")
+        if absent:
+            files = collect_provision_files(company_dir, absent)
+            log(f"  would import (create): {[r['name'] for r in absent]} — "
+                f"files {sorted(files)} (CEO excluded)")
+        for role in roles:
+            log(f"  would ensure {role['name']}: adapterType=hermes_remote, "
+                f"role={paperclip_role(role['name'])}, heartbeat={heartbeat}")
         return EX_OK
 
-    # Real run: resolve companyId + existing agents via the CEO key.
+    # Real run: resolve companyId + existing agents (by name) via the CEO key.
     ceo_key = load_ceo_key()
     with make_client(api_url, ceo_key, transport) as client:
         resolved, msg = resolve_ceo(client)
@@ -441,77 +513,69 @@ def provision_once(api_url: str, companies_root: str, slug: str, dry_run: bool,
             return EX_TEMPFAIL
         company_id = resolved.get("companyId")
         if not company_id:
-            log("resolve-ceo: resolved CEO has no companyId; cannot target import")
+            log("resolve-ceo: resolved CEO has no companyId; cannot target the company")
             return EX_TEMPFAIL
-        existing = resolve_agent_ids(client, company_id)
-
-    pending = to_provision(existing)
-    if not pending:
-        log(f"company {slug}: all non-CEO roles already provisioned — nothing to do")
-        return EX_OK
+        existing = resolve_agent_ids_by_name(client, company_id)
 
     board_key = load_board_key()
     if board_key is None:  # main gates this, but stay self-contained
         log("no board credential available; skipping")
         return EX_OK
     if "runnerAuthToken" not in adapter_config:
-        log("WARN: RUNNER_AUTH_TOKEN unset — imported adapters carry no token; the onboarder "
-            "re-converges the adapter on the next deploy, so this is non-fatal")
+        log("WARN: RUNNER_AUTH_TOKEN unset — provisioned adapters carry no runner token")
 
-    files = {COMPANY_FILE: read_company_doc(company_dir)}
-    files.update({r["agents_md"]: bundles[r["name"]] for r in pending})
-    payload = build_import_payload(company_id, files, pending, adapter_config)
-    log(f"company {slug}: importing {len(pending)} non-CEO role(s) — {', '.join(r['name'] for r in pending)}")
-
+    statuses: list[str] = []
     with make_client(api_url, board_key, transport) as client:
-        try:
-            resp = import_company(client, payload)
-        except httpx.HTTPError as exc:
-            log(f"import: POST failed ({exc})")
-            return EX_TEMPFAIL
-        if is_auth_failure(resp):
-            log(f"import: board auth failed [{resp.status_code}] — board key may be expired (#42)")
-            return EX_HARD
-        if resp.status_code // 100 == 5:
-            log(f"import: server error [{resp.status_code}] {resp.text[:200]}")
-            return EX_TEMPFAIL
-        if resp.status_code // 100 != 2:
-            log(f"import: unexpected [{resp.status_code}] {resp.text[:200]}")
-            return EX_HARD
-
-        created = parse_created_agents(resp)
-        if not created:
-            log(f"import: 2xx but no created agent ids parsed from response — {resp.text[:300]}")
-            return EX_HARD  # the spike confirms the response shape; fail loud until then
-
-        # Fix each new agent's role (import defaults it to "agent", #1994). Best-effort: the
-        # agent exists either way; a failed role PATCH is a warning the operator/onboarder fixes.
-        rc = EX_OK
-        for role in pending:
-            aid = created.get(role["name"])
-            if not aid:
-                log(f"role {role['name']}: import returned no id — verify on the board")
-                rc = EX_HARD
-                continue
+        # 1. Create the missing non-CEO agents (one import for all absent roles; CEO never in it).
+        absent = [r for r in roles if r["name"] not in existing]
+        if absent:
+            files = collect_provision_files(company_dir, absent)
+            payload = build_import_payload(company_id, files, absent, adapter_config)
+            log(f"company {slug}: creating {len(absent)} agent(s) — "
+                f"{', '.join(r['name'] for r in absent)}")
             try:
-                pr = patch_agent_role(client, aid, paperclip_role(role["name"]))
-                if pr.status_code // 100 == 2:
-                    log(f"role {role['name']}: created {aid}, role set to {paperclip_role(role['name'])}")
-                else:
-                    log(f"role {role['name']}: created {aid} but role PATCH [{pr.status_code}] "
-                        f"{pr.text[:160]} — set it manually")
+                resp = import_company(client, payload)
             except httpx.HTTPError as exc:
-                log(f"role {role['name']}: created {aid} but role PATCH failed ({exc})")
+                log(f"import: POST failed ({exc})")
+                return EX_TEMPFAIL
+            if is_auth_failure(resp):
+                log(f"import: board auth failed [{resp.status_code}] — board key may be expired (#42)")
+                return EX_HARD
+            if resp.status_code // 100 == 5:
+                log(f"import: server error [{resp.status_code}] {resp.text[:200]}")
+                return EX_TEMPFAIL
+            if resp.status_code // 100 != 2:
+                log(f"import: unexpected [{resp.status_code}] {resp.text[:200]}")
+                return EX_HARD
+            created = parse_created_agents(resp)   # slug (= name) → id
+            if not created:
+                log(f"import: 2xx but no created agent ids parsed — {resp.text[:300]}")
+                return EX_HARD
+            existing.update(created)
+            for role in absent:
+                if role["name"] in created:
+                    log(f"role {role['name']}: created {created[role['name']]}")
+                else:
+                    log(f"role {role['name']}: import returned no id — verify on the board")
+                    statuses.append("error")
 
-        log("provisioned — add these to fleet/agents.yaml under the company's agents:")
-        for role in pending:
-            aid = created.get(role["name"], "<missing>")
-            log(f"  - name: {role['name']}")
-            log(f"    role: {paperclip_role(role['name'])}")
-            log(f"    existingId: {aid}")
-        log("then: run the onboarder (adapter wire) + flip these roles' manifest status to "
-            "active (the #82 sync bundles them).")
-        return rc
+        # 2. Reconcile every active non-CEO agent (created or pre-existing): adapter + role +
+        #    heartbeat, idempotent. Self-heals a partial prior run (role left as "agent").
+        for role in roles:
+            agent_id = existing.get(role["name"])
+            if not agent_id:
+                log(f"role {role['name']}: no agent id after provisioning — cannot reconcile")
+                statuses.append("error")
+                continue
+            statuses.append(reconcile_agent(client, agent_id, adapter_config,
+                                            paperclip_role(role["name"]), heartbeat))
+
+    if "error" in statuses:
+        return EX_HARD
+    if "temp" in statuses:
+        return EX_TEMPFAIL
+    log(f"company {slug}: all active non-CEO roles provisioned + reconciled")
+    return EX_OK
 
 
 def resolve_slug() -> tuple[str, bool]:
@@ -528,7 +592,7 @@ def main() -> int:
     parser.add_argument("--once", action="store_true",
                         help="run a single provision pass and exit (accepted for parity)")
     parser.add_argument("--dry-run", action="store_true",
-                        help="log the import + role PATCHes without writing (read-only)")
+                        help="log what would be created + reconciled without writing (read-only)")
     args = parser.parse_args()
 
     api_url = os.environ.get("PAPERCLIP_API_URL", DEFAULT_API_URL).rstrip("/")
