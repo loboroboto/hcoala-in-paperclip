@@ -23,6 +23,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = REPO_ROOT / "scripts" / "paperclip-reconcile.py"
@@ -51,8 +52,7 @@ def _creds(monkeypatch, tmp_path):
     monkeypatch.setenv("PAPERCLIP_BOARD_KEY", "pcp_board_test")
     monkeypatch.setenv("RUNNER_AUTH_TOKEN", "runner-token-test")
     monkeypatch.setenv("PAPERCLIP_ONBOARD", "1")   # onboard phase on-switch (orchestrator tests)
-    for v in ("PAPERCLIP_FLEET_MODEL", "PAPERCLIP_HEARTBEAT_INTERVAL", "PAPERCLIP_API_URL",
-              "PAPERCLIP_RUNNER_URL", "PAPERCLIP_COMPANY_TEMPLATE"):
+    for v in ("PAPERCLIP_API_URL", "PAPERCLIP_COMPANY_TEMPLATE"):
         monkeypatch.delenv(v, raising=False)
 
 
@@ -81,26 +81,35 @@ def _bundle(root: str, slug: str, role: str) -> str:
     return (Path(root) / slug / "agents" / role / "AGENTS.md").read_text()
 
 
+# The single source of the fleet adapterConfig in the tests — both _make_registry (what the
+# phases load) and _defaults_adapter_config (what in-sync seeding builds to match) derive from
+# this, mirroring the production "fleet/agents.yaml defaults is the one source" contract.
+REGISTRY_DEFAULTS = {
+    "paperclipApiUrl": "http://board.test:3100",
+    "remoteRunnerUrl": "http://runner.test:8788/run",
+    "runnerAuthTokenEnv": "RUNNER_AUTH_TOKEN",
+    "persistSession": True,
+    "timeoutSec": 600,
+    "model": "test/model",
+    "heartbeat": {"enabled": True, "intervalSec": 300},
+}
+
+
 def _make_registry(tmp_path: Path) -> str:
-    """A minimal fleet registry (agents.yaml shape) with a CEO resolved from the key."""
+    """A minimal fleet registry (agents.yaml shape) with a CEO resolved from the key, whose
+    `defaults` drive the adapterConfig for both phases."""
     p = tmp_path / "agents.yaml"
-    p.write_text(
-        "defaults:\n"
-        "  paperclipApiUrl: http://board.test:3100\n"
-        "  remoteRunnerUrl: http://runner.test:8788/run\n"
-        "  runnerAuthTokenEnv: RUNNER_AUTH_TOKEN\n"
-        "  persistSession: true\n"
-        "  timeoutSec: 600\n"
-        "  model: test/model\n"
-        "  heartbeat: { enabled: true, intervalSec: 300 }\n"
-        "companies:\n"
-        "  - ceo: true\n"
-        "    resolveCeoFromKey: true\n"
-        "    agents:\n"
-        "      - name: hermes\n"
-        "        role: ceo\n"
-    )
+    reg = {"defaults": REGISTRY_DEFAULTS,
+           "companies": [{"ceo": True, "resolveCeoFromKey": True,
+                          "agents": [{"name": "hermes", "role": "ceo"}]}]}
+    p.write_text(yaml.safe_dump(reg))
     return str(p)
+
+
+def _defaults_adapter_config(token: str = "runner-token-test") -> dict:
+    """The adapterConfig the provision phase now builds from REGISTRY_DEFAULTS — used to seed
+    an already-in-sync agent so the idempotency check matches."""
+    return mod.build_adapter_target(REGISTRY_DEFAULTS, {}, token)["adapterConfig"]
 
 
 # ===========================================================================
@@ -244,8 +253,10 @@ class ProvisionBoard:
 
 
 def _run_provision(board, root, slug, dry_run=False, board_key="pcp_board_test"):
-    # phase_provision now returns (rc, mutated); helper yields just the rc for the rc assertions.
-    return mod.phase_provision("http://board.test", root, slug, dry_run, board_key,
+    # phase_provision now takes a registry_path (the adapterConfig source) and returns
+    # (rc, mutated); helper writes a registry under root and yields just the rc.
+    registry = _make_registry(Path(root))
+    return mod.phase_provision("http://board.test", root, slug, registry, dry_run, board_key,
                                httpx.MockTransport(board.handler))[0]
 
 
@@ -322,7 +333,7 @@ def test_provision_idempotent_when_in_sync(tmp_path):
     root, slug = _make_company(tmp_path, [("ceo", "active"), ("staff-engineer", "active")])
     board = ProvisionBoard()
     board.add_agent("se-1", "staff-engineer", "engineer",
-                    adapter_config=mod.build_adapter_config("runner-token-test"),
+                    adapter_config=_defaults_adapter_config(),
                     runtime_config={"heartbeat": {"enabled": True, "intervalSec": 300}})
     assert _run_provision(board, root, slug) == EX_OK
     assert board.import_calls == 0 and board.patches == 0
@@ -331,7 +342,7 @@ def test_provision_idempotent_when_in_sync(tmp_path):
 def test_provision_self_heals_partial_prior_run(tmp_path):
     root, slug = _make_company(tmp_path, [("ceo", "active"), ("cto", "active")])
     board = ProvisionBoard()
-    board.add_agent("cto-1", "cto", "agent", adapter_config=mod.build_adapter_config("runner-token-test"),
+    board.add_agent("cto-1", "cto", "agent", adapter_config=_defaults_adapter_config(),
                     runtime_config={"heartbeat": {"enabled": False}})
     assert _run_provision(board, root, slug) == EX_OK
     assert board.import_calls == 0 and board.patches == 1
@@ -519,21 +530,21 @@ DEFAULTS = {
 }
 
 
-def test_build_desired_maps_fields_and_token():
-    desired = mod.build_desired(DEFAULTS, {"name": "hermes", "role": "ceo"}, "tok-literal")
+def test_build_adapter_target_maps_fields_and_token():
+    desired = mod.build_adapter_target(DEFAULTS, {"name": "hermes", "role": "ceo"}, "tok-literal")
     cfg = desired["adapterConfig"]
     assert desired["adapterType"] == "hermes_remote"
     assert cfg["runnerAuthToken"] == "tok-literal" and cfg["model"] == "deepseek/deepseek-v4-flash"
     assert desired["heartbeat"] == {"enabled": True, "intervalSec": 300}
 
 
-def test_build_desired_omits_model_when_unset():
+def test_build_adapter_target_omits_model_when_unset():
     defaults = {k: v for k, v in DEFAULTS.items() if k != "model"}
-    assert "model" not in mod.build_desired(defaults, {"name": "h"}, "t")["adapterConfig"]
+    assert "model" not in mod.build_adapter_target(defaults, {"name": "h"}, "t")["adapterConfig"]
 
 
 def test_needs_update_drift():
-    desired = mod.build_desired(DEFAULTS, {"name": "h"}, "tok")
+    desired = mod.build_adapter_target(DEFAULTS, {"name": "h"}, "tok")
     in_sync = {"adapterType": "hermes_remote", "adapterConfig": dict(desired["adapterConfig"]),
                "runtimeConfig": {"heartbeat": dict(desired["heartbeat"])}}
     assert mod.needs_update(in_sync, desired) is False
@@ -575,7 +586,7 @@ class PatchBoard:
 
 
 def _desired():
-    return mod.build_desired(DEFAULTS, {"name": "hermes", "role": "ceo"}, "tok")
+    return mod.build_adapter_target(DEFAULTS, {"name": "hermes", "role": "ceo"}, "tok")
 
 
 def _onboard_client(board):
@@ -802,21 +813,22 @@ def test_run_once_writes_status_breadcrumb(tmp_path, monkeypatch):
 # ===========================================================================
 def test_provision_returns_mutated_flag(tmp_path):
     # mutated=True when a create/PATCH happens (self-heal); False when already in sync.
+    reg = _make_registry(tmp_path)
     root, slug = _make_company(tmp_path, [("ceo", "active"), ("cto", "active")])
     t = httpx.MockTransport(ProvisionBoard().handler)
-    rc, mutated = mod.phase_provision("http://board.test", root, slug, False, "pcp_board_test", t)
+    rc, mutated = mod.phase_provision("http://board.test", root, slug, reg, False, "pcp_board_test", t)
     assert rc == EX_OK and mutated is True            # created cto this pass
 
     board = ProvisionBoard()
-    board.add_agent("cto-1", "cto", "cto", adapter_config=mod.build_adapter_config("runner-token-test"),
+    board.add_agent("cto-1", "cto", "cto", adapter_config=_defaults_adapter_config(),
                     runtime_config={"heartbeat": {"enabled": True, "intervalSec": 300}})
-    rc, mutated = mod.phase_provision("http://board.test", root, slug, False, "pcp_board_test",
+    rc, mutated = mod.phase_provision("http://board.test", root, slug, reg, False, "pcp_board_test",
                                       httpx.MockTransport(board.handler))
     assert rc == EX_OK and mutated is False           # already in sync → no mutation
 
     # No active non-CEO roles → no work, not mutated.
     root2, slug2 = _make_company(tmp_path, [("ceo", "active")], slug="ceoonly")
-    rc, mutated = mod.phase_provision("http://board.test", root2, slug2, False, "pcp_board_test",
+    rc, mutated = mod.phase_provision("http://board.test", root2, slug2, reg, False, "pcp_board_test",
                                       httpx.MockTransport(ProvisionBoard().handler))
     assert rc == EX_OK and mutated is False
 
@@ -884,3 +896,24 @@ def test_write_status_warns_directly_on_unwritable_path(tmp_path, monkeypatch, c
         mod._capture = None
     err = capsys.readouterr().err
     assert "could not write status breadcrumb" in err  # printed directly, not buffered/lost
+
+
+# ===========================================================================
+# Single source — provision (specialist) and onboard (CEO) share fleet defaults
+# ===========================================================================
+def test_provision_and_onboard_share_one_adapterconfig_source(tmp_path, monkeypatch):
+    # The drift this change fixes: provision and onboard both build the adapterConfig from the
+    # SAME fleet `defaults`. Even with PAPERCLIP_FLEET_MODEL unset (the OLD provision model
+    # source), the specialist gets the fleet model — identical to the CEO. Pre-change, provision
+    # read env (→ no model) while onboard read fleet (→ a model), so they could diverge.
+    monkeypatch.delenv("PAPERCLIP_FLEET_MODEL", raising=False)
+    reg = _make_registry(tmp_path)
+    root, slug = _make_company(tmp_path, [("ceo", "active"), ("cto", "active")])
+    board = ProvisionBoard()
+    mod.phase_provision("http://board.test", root, slug, reg, False, "pcp_board_test",
+                        httpx.MockTransport(board.handler))
+    specialist = _agent_by_name(board, "cto")["adapterConfig"]
+    ceo = mod.build_adapter_target(REGISTRY_DEFAULTS, {"role": "ceo"}, "runner-token-test")["adapterConfig"]
+    assert specialist["model"] == ceo["model"] == "test/model"            # fleet, not env
+    assert specialist["remoteRunnerUrl"] == ceo["remoteRunnerUrl"]
+    assert specialist["paperclipApiUrl"] == ceo["paperclipApiUrl"]

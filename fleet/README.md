@@ -26,6 +26,11 @@ companies:
 `defaults` provide fleet-wide values; any field set on an individual agent overrides
 the default of the same name (agent-level wins).
 
+`defaults` is the **single source** of the `hermes_remote` adapterConfig for the whole
+fleet: the onboard phase applies it to the CEO (merged with the CEO's agent entry), and the
+provision phase applies it to every active non-CEO specialist (defaults only) — so the CEO
+and its specialists are wired identically (same runner, model, heartbeat).
+
 ## Field → Paperclip config mapping
 
 The onboarder maps each resolved field (default merged with agent override) onto the

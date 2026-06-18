@@ -47,9 +47,9 @@ signal as well as the outcome.
 
 Config (env): PAPERCLIP_API_URL, PAPERCLIP_COMPANY_TEMPLATE, PAPERCLIP_COMPANIES_BASE,
   FLEET_REGISTRY, PAPERCLIP_CEO_KEY (or ~/.pclip.key), PAPERCLIP_BOARD_KEY (or
-  ~/.paperclip/auth.json), RUNNER_AUTH_TOKEN, PAPERCLIP_RUNNER_URL, PAPERCLIP_FLEET_MODEL,
-  PAPERCLIP_HEARTBEAT_INTERVAL, PAPERCLIP_ONBOARD_INTERVAL, PAPERCLIP_ONBOARD_BACKOFF_MAX,
-  RECONCILE_STATUS_FILE, HERMES_HOME.
+  ~/.paperclip/auth.json), RUNNER_AUTH_TOKEN, PAPERCLIP_ONBOARD_INTERVAL,
+  PAPERCLIP_ONBOARD_BACKOFF_MAX, RECONCILE_STATUS_FILE, HERMES_HOME. (The runner URL, model,
+  and heartbeat now come from fleet/agents.yaml `defaults`, not env — single source.)
 """
 
 from __future__ import annotations
@@ -90,9 +90,6 @@ INSTRUCTIONS_BUNDLE_KEYS = (
 )
 
 # --- provision-phase wiring ---
-DEFAULT_RUNNER_URL = "http://hermes-interprets-coala.railway.internal:8788/run"
-DEFAULT_PAPERCLIP_INTERNAL = "http://paperclip.railway.internal:3100"
-DEFAULT_HEARTBEAT_INTERVAL = 300
 # Our role slugs → Paperclip's role enum (CONFIRMED live 2026-06-17). Import defaults a
 # created agent's role to "agent" (#1994); we PATCH it after. The board enum is
 # ceo/cto/cmo/cfo/security/engineer/designer/qa/researcher/general — raw slugs are rejected.
@@ -163,6 +160,35 @@ def _env_int(name: str, default: int) -> int:
 
 
 # ===========================================================================
+# Shared — the hermes_remote adapter target, built from fleet/agents.yaml defaults
+# ===========================================================================
+def build_adapter_target(defaults: dict[str, Any], overrides: dict[str, Any],
+                         runner_token: str) -> dict[str, Any]:
+    """Merge the fleet registry `defaults` + per-agent `overrides` into the target
+    adapterType/adapterConfig/heartbeat. The SINGLE source of the hermes_remote config for both
+    phases: onboard passes the CEO's agent entry as overrides; provision passes {} (defaults
+    only). Maps registry fields onto the adapterConfig 1:1; the runner token is a literal VALUE
+    (Paperclip has no {{}} templating)."""
+    merged = {**defaults, **overrides}
+    adapter_config: dict[str, Any] = {
+        "remoteRunnerUrl": merged["remoteRunnerUrl"],
+        "runnerAuthToken": runner_token,
+        "paperclipApiUrl": merged["paperclipApiUrl"],
+        "persistSession": merged.get("persistSession", True),
+        "timeoutSec": merged.get("timeoutSec", 600),
+    }
+    model = merged.get("model")
+    if model:
+        adapter_config["model"] = model
+    hb = merged.get("heartbeat", {}) or {}
+    return {
+        "adapterType": "hermes_remote",
+        "adapterConfig": adapter_config,
+        "heartbeat": {"enabled": hb.get("enabled", True), "intervalSec": hb.get("intervalSec", 300)},
+    }
+
+
+# ===========================================================================
 # PHASE 1 — provision (board-key: create + wire the active non-CEO agents)
 # ===========================================================================
 def select_provision_roles(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -187,22 +213,6 @@ def collect_provision_files(company_dir: Path, roles: list[dict[str, Any]]) -> d
 def paperclip_role(role_name: str) -> str:
     """Map our role slug to Paperclip's role enum (confirmed by the Phase 0 spike)."""
     return PAPERCLIP_ROLE_MAP.get(role_name, role_name)
-
-
-def build_adapter_config(runner_token: str) -> dict[str, Any]:
-    """The hermes_remote adapterConfig the import bakes into each new agent (mirrors the
-    onboard phase's build_desired). The onboard phase re-converges it every pass."""
-    cfg: dict[str, Any] = {
-        "remoteRunnerUrl": os.environ.get("PAPERCLIP_RUNNER_URL", DEFAULT_RUNNER_URL),
-        "runnerAuthToken": runner_token,
-        "paperclipApiUrl": os.environ.get("PAPERCLIP_API_URL", DEFAULT_PAPERCLIP_INTERNAL),
-        "persistSession": True,
-        "timeoutSec": 600,
-    }
-    model = os.environ.get("PAPERCLIP_FLEET_MODEL", "").strip()
-    if model:
-        cfg["model"] = model
-    return cfg
 
 
 def build_import_payload(company_id: str, files: dict[str, str], roles: list[dict[str, Any]],
@@ -244,14 +254,6 @@ def parse_created_agents(resp: httpx.Response) -> dict[str, str]:
         if slug:
             out[slug] = a["id"]
     return out
-
-
-def desired_heartbeat() -> dict[str, Any]:
-    """Provisioned non-CEO agents heartbeat on a timer; a wake with no dispatched work is a
-    no-op per each role's charter. Interval mirrors the fleet default."""
-    interval = os.environ.get("PAPERCLIP_HEARTBEAT_INTERVAL", "").strip()
-    return {"enabled": True,
-            "intervalSec": int(interval) if interval.isdigit() else DEFAULT_HEARTBEAT_INTERVAL}
 
 
 def agent_needs_update(current: dict[str, Any], adapter_config: dict[str, Any],
@@ -318,13 +320,17 @@ def _provision_agent(client: httpx.Client, agent_id: str, adapter_config: dict[s
     return "error"
 
 
-def phase_provision(api_url: str, companies_root: str, slug: str, dry_run: bool,
-                    board_key: str | None,
+def phase_provision(api_url: str, companies_root: str, slug: str, registry_path: str,
+                    dry_run: bool, board_key: str | None,
                     transport: httpx.BaseTransport | None = None) -> tuple[int, bool]:
     """Create + wire the active non-CEO agents. No-op (EX_OK) without a board key (real run)
     or when no non-CEO role is active. The CEO is never imported. Returns (exit_code, mutated)
     where `mutated` is True if this pass created or PATCHed an agent (feeds the loop's
-    transition signal so a self-heal is logged immediately)."""
+    transition signal so a self-heal is logged immediately).
+
+    The adapterConfig + heartbeat baked into each agent come from the fleet registry `defaults`
+    (build_adapter_target) — the SAME source the onboard phase uses for the CEO — so specialists
+    and the CEO are wired identically."""
     if not dry_run and board_key is None:
         log_provision(f"company {slug}: no board credential — skipping")
         return EX_OK, False
@@ -345,11 +351,13 @@ def phase_provision(api_url: str, companies_root: str, slug: str, dry_run: bool,
         common.read_role_bundle(company_dir, role, log_provision)
     log_provision(f"company {slug}: {len(roles)} active non-CEO role(s) — "
                   f"{', '.join(r['name'] for r in roles)}")
-    heartbeat = desired_heartbeat()
+    defaults = common.load_registry(registry_path, log_provision).get("defaults") or {}
+    token_env = defaults.get("runnerAuthTokenEnv", DEFAULT_RUNNER_TOKEN_ENV)
 
     if dry_run:
-        token = os.environ.get(DEFAULT_RUNNER_TOKEN_ENV, "").strip() or "<RUNNER_AUTH_TOKEN>"
-        adapter_config = build_adapter_config(token)
+        token = os.environ.get(token_env, "").strip() or "<RUNNER_AUTH_TOKEN>"
+        target = build_adapter_target(defaults, {}, token)
+        adapter_config, heartbeat = target["adapterConfig"], target["heartbeat"]
         company_id = "<resolved-from-CEO-key-at-runtime>"
         existing: dict[str, str] = {}
         ceo_key = common.ceo_key_or_none(log_provision)
@@ -377,8 +385,9 @@ def phase_provision(api_url: str, companies_root: str, slug: str, dry_run: bool,
         return EX_OK, False
 
     # Real run: token is required to bake a valid adapterConfig (the unified hard error).
-    runner_token = common.load_runner_token(DEFAULT_RUNNER_TOKEN_ENV, log_provision)
-    adapter_config = build_adapter_config(runner_token)
+    runner_token = common.load_runner_token(token_env, log_provision)
+    target = build_adapter_target(defaults, {}, runner_token)
+    adapter_config, heartbeat = target["adapterConfig"], target["heartbeat"]
     ceo_key = common.load_ceo_key(log_provision)
     with common.make_client(api_url, ceo_key, transport) as client:
         resolved, msg = common.resolve_ceo(client)
@@ -631,47 +640,6 @@ def phase_sync(api_url: str, companies_root: str, slug: str, dry_run: bool,
 # ===========================================================================
 # PHASE 3 — onboard (CEO agent-key: PATCH onto hermes_remote → our runner)
 # ===========================================================================
-def load_registry(path: str) -> dict[str, Any]:
-    import yaml
-    p = Path(path)
-    if not p.is_file():
-        log_onboard(f"ERROR: registry not found at {path} (set FLEET_REGISTRY?)")
-        sys.exit(EX_HARD)
-    try:
-        data = yaml.safe_load(p.read_text()) or {}
-    except yaml.YAMLError as exc:
-        log_onboard(f"ERROR: failed to parse {path}: {exc}")
-        sys.exit(EX_HARD)
-    if not isinstance(data, dict):
-        log_onboard(f"ERROR: {path} must be a mapping at the top level")
-        sys.exit(EX_HARD)
-    return data
-
-
-def build_desired(defaults: dict[str, Any], agent: dict[str, Any],
-                  runner_token: str) -> dict[str, Any]:
-    """Merge defaults + agent overrides into target adapterType/adapterConfig/heartbeat.
-    Maps registry fields onto the hermes_remote adapterConfig 1:1; the runner token is a
-    literal VALUE (Paperclip has no {{}} templating)."""
-    merged = {**defaults, **agent}
-    adapter_config: dict[str, Any] = {
-        "remoteRunnerUrl": merged["remoteRunnerUrl"],
-        "runnerAuthToken": runner_token,
-        "paperclipApiUrl": merged["paperclipApiUrl"],
-        "persistSession": merged.get("persistSession", True),
-        "timeoutSec": merged.get("timeoutSec", 600),
-    }
-    model = merged.get("model")
-    if model:
-        adapter_config["model"] = model
-    hb = merged.get("heartbeat", {}) or {}
-    return {
-        "adapterType": "hermes_remote",
-        "adapterConfig": adapter_config,
-        "heartbeat": {"enabled": hb.get("enabled", True), "intervalSec": hb.get("intervalSec", 300)},
-    }
-
-
 def needs_update(current: dict[str, Any], desired: dict[str, Any]) -> bool:
     """True if any managed field drifts from desired (idempotency check)."""
     if current.get("adapterType") != desired["adapterType"]:
@@ -760,7 +728,7 @@ class OnboardConfig:
     a genuine config fault is fatal (sys.exit) rather than retried forever."""
 
     def __init__(self, registry_path: str) -> None:
-        reg = load_registry(registry_path)
+        reg = common.load_registry(registry_path, log_onboard)
         self.defaults = reg.get("defaults") or {}
         self.companies = reg.get("companies") or []
         token_env = self.defaults.get("runnerAuthTokenEnv", DEFAULT_RUNNER_TOKEN_ENV)
@@ -804,7 +772,7 @@ def _onboard_pass(cfg: OnboardConfig, api_url: str, dry_run: bool,
                     results.append((f"{cid_disp}/{name}", "skipped",
                                     f"{cid_disp}/{name}: no existingId — skipping (agent creation is #21)"))
                     continue
-                desired = build_desired(cfg.defaults, agent, cfg.runner_token)
+                desired = build_adapter_target(cfg.defaults, agent, cfg.runner_token)
                 status, msg = _onboard_agent(client, agent_id, desired, dry_run)
                 results.append((agent_id, status, msg + note))
     return results
@@ -904,7 +872,7 @@ def reconcile_once(api_url: str, companies_root: str, slug: str, registry_path: 
 
     prov_rc, prov_mut = _guard_phase(
         "provision",
-        lambda: phase_provision(api_url, companies_root, slug, dry_run, board_key, transport),
+        lambda: phase_provision(api_url, companies_root, slug, registry_path, dry_run, board_key, transport),
         (EX_HARD, False))
     sync_rc, sync_mut = _guard_phase(
         "sync",
