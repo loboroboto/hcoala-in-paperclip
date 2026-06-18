@@ -318,3 +318,22 @@ def resolve_slug() -> tuple[str, bool]:
     if explicit:
         return explicit, False
     return DEFAULT_COMPANY_TEMPLATE, True
+
+
+def load_registry(path: str, log: Logger) -> dict[str, Any]:
+    """Parse the fleet desired-state registry (fleet/agents.yaml). Its `defaults` block is the
+    single source of the hermes_remote adapterConfig for BOTH the onboard phase (the CEO) and
+    the provision phase (the specialists). Fail closed (EX_HARD) on missing/unparseable."""
+    p = Path(path)
+    if not p.is_file():
+        log(f"ERROR: registry not found at {path} (set FLEET_REGISTRY?)")
+        sys.exit(EX_HARD)
+    try:
+        data = yaml.safe_load(p.read_text()) or {}
+    except yaml.YAMLError as exc:
+        log(f"ERROR: failed to parse {path}: {exc}")
+        sys.exit(EX_HARD)
+    if not isinstance(data, dict):
+        log(f"ERROR: {path} must be a mapping at the top level")
+        sys.exit(EX_HARD)
+    return data
